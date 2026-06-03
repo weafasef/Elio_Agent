@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+litellm_config.yaml
 node_modules
 openspec
 .DS_Store
