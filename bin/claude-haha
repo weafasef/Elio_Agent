@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+#Get your current working directory and export it as an environment variable.
+export CALLER_DIR="${CALLER_DIR:-$(pwd -W 2>/dev/null || pwd)}"
+
+cd "$ROOT_DIR"
+
+# --- Auto-manage LiteLLM proxy for DeepSeek ---
+# If ANTHROPIC_BASE_URL points to localhost litellm, start it automatically.
+LITELLM_PORT="4000"
+LITELLM_PID_FILE="/tmp/cc-haha-litellm.pid"
+
+start_litellm() {
+  local url="${ANTHROPIC_BASE_URL:-}"
+  if [[ "$url" != http://localhost:$LITELLM_PORT* && "$url" != http://127.0.0.1:$LITELLM_PORT* ]]; then
+    return 0  # Not using local litellm, skip
+  fi
+  # Already running?
+  if curl -s "http://localhost:$LITELLM_PORT/health" > /dev/null 2>&1; then
+    return 0
+  fi
+  # Check for existing PID file
+  if [[ -f "$LITELLM_PID_FILE" ]]; then
+    local old_pid=$(cat "$LITELLM_PID_FILE")
+    if kill -0 "$old_pid" 2>/dev/null; then
+      return 0  # Already running with our PID
+    fi
+  fi
+  echo "[cc-haha] Starting LiteLLM proxy (DeepSeek) on port $LITELLM_PORT..."
+  litellm --config "$ROOT_DIR/litellm_config.yaml" --port "$LITELLM_PORT" > /tmp/cc-haha-litellm.log 2>&1 &
+  local pid=$!
+  echo "$pid" > "$LITELLM_PID_FILE"
+  # Wait for it to be ready
+  for i in {1..30}; do
+    if curl -s "http://localhost:$LITELLM_PORT/health" > /dev/null 2>&1; then
+      echo "[cc-haha] LiteLLM proxy ready (PID: $pid)"
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "[cc-haha] WARNING: LiteLLM proxy may not be ready. Proceeding anyway..."
+}
+
+stop_litellm() {
+  if [[ -f "$LITELLM_PID_FILE" ]]; then
+    local pid=$(cat "$LITELLM_PID_FILE")
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "[cc-haha] Stopping LiteLLM proxy (PID: $pid)..."
+      kill "$pid" 2>/dev/null || true
+    fi
+    rm -f "$LITELLM_PID_FILE"
+  fi
+}
+
+# Only start/stop litellm in interactive mode (not -p/--print or subcommands)
+if [[ $# -eq 0 || "$1" != "-"* ]]; then
+  start_litellm
+  trap stop_litellm EXIT
+fi
+# --- End LiteLLM auto-management ---
+
+# When spawned by the desktop/web server as a child CLI process,
+# skip .env loading — the server has already set the correct env
+# via cc-haha/settings.json. Loading .env would re-inject stale
+# provider keys (e.g., a MiniMax key as ANTHROPIC_API_KEY) that
+# override the active provider config.
+if [[ "${CC_HAHA_SKIP_DOTENV:-0}" == "1" ]]; then
+  # Bun auto-loads .env by default; explicitly point to /dev/null to suppress.
+  ENV_FILE_FLAG="--env-file=/dev/null"
+elif [[ -f .env ]]; then
+  ENV_FILE_FLAG="--env-file=.env"
+else
+  ENV_FILE_FLAG=""
+fi
+
+# Force recovery CLI (simple readline REPL, no Ink TUI)
+if [[ "${CLAUDE_CODE_FORCE_RECOVERY_CLI:-0}" == "1" ]]; then
+  exec bun $ENV_FILE_FLAG ./src/localRecoveryCli.ts "$@"
+fi
+
+# Default: full CLI with Ink TUI
+exec bun $ENV_FILE_FLAG ./src/entrypoints/cli.tsx "$@"
