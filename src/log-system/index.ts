@@ -8,7 +8,8 @@
  *   audit.toolInvoke('Bash', { command: 'ls' })
  *   await audit.shutdown()
  *
- * 日志写入 ~/.claude/log-system/<session-id>/audit.jsonl
+ * 日志写入 ~/.claude/log-system/YYYY-MM-DD.jsonl
+ * 一天一个文件，同一天多次启动会续写到同一文件。
  * 采用缓冲写入 + 定时刷新，避免阻塞主循环。
  */
 
@@ -39,6 +40,16 @@ export function initAuditLogger(config?: Partial<AuditLogConfig>): AuditLogger {
   return _instance
 }
 
+// ── 日期工具 ──────────────────────────────────────────
+
+/** 生成按天的日志文件名，如 2026-06-04.jsonl */
+function dailyLogFileName(now: Date): string {
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}.jsonl`
+}
+
 // ── 日志引擎 ──────────────────────────────────────────
 
 export class AuditLogger {
@@ -59,17 +70,19 @@ export class AuditLogger {
 
   // ── 初始化 ──────────────────────────────────────────
 
-  /** 初始化日志目录和文件。必须在 session 开始前调用。 */
+  /** 初始化日志文件。必须在 session 开始前调用。一天一个文件，同一天续写。 */
   async init(sessionId?: string): Promise<void> {
     if (this.initialized) return
 
     if (sessionId) this.sessionId = sessionId
 
     const logDir =
-      this.config.logDir || join(homedir(), '.claude', 'log-system', this.sessionId)
+      this.config.logDir || join(homedir(), '.claude', 'log-system')
     await mkdir(logDir, { recursive: true })
 
-    this.logFilePath = join(logDir, 'audit.jsonl')
+    // 按天命名文件：如 ~/.claude/log-system/2026-06-04.jsonl
+    const fileName = dailyLogFileName(new Date())
+    this.logFilePath = join(logDir, fileName)
     this.initialized = true
 
     // 启动定时刷新
@@ -77,10 +90,11 @@ export class AuditLogger {
       this.flush().catch(() => {})
     }, this.config.flushIntervalMs)
 
-    // 写入 session 开始事件
+    // 写入 session 开始事件（用于区分同一天内的多次启动）
     await this.event('session.start', {
       sessionId: this.sessionId,
       startedAt: this.startedAt,
+      logFile: fileName,
     })
   }
 
