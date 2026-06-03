@@ -79,7 +79,7 @@ export class AuditLogger {
       this.config.logDir || join(process.cwd(), 'logs')
     await mkdir(logDir, { recursive: true })
 
-    // 按天命名文件：如 ~/.claude/log-system/2026-06-04.jsonl
+    // 按天命名文件：如 logs/2026-06-04.jsonl
     const fileName = dailyLogFileName(new Date())
     this.logFilePath = join(logDir, fileName)
     this.initialized = true
@@ -89,12 +89,27 @@ export class AuditLogger {
       this.flush().catch(() => {})
     }, this.config.flushIntervalMs)
 
-    // 写入 session 开始事件（用于区分同一天内的多次启动）
+    // 注册进程退出钩子，确保退出前刷盘（-p 模式进程直接退出，不调 shutdown）
+    const gracefulFlush = () => {
+      // 同步写入，确保在进程退出前完成
+      if (this.buffer.length === 0) return
+      const lines = this.buffer.splice(0)
+      try {
+        const { appendFileSync } = require('fs')
+        appendFileSync(this.logFilePath, lines.join('\n') + '\n', 'utf8')
+      } catch {}
+    }
+    process.on('exit', gracefulFlush)
+    process.on('SIGINT', () => { gracefulFlush(); process.exit(0) })
+    process.on('SIGTERM', () => { gracefulFlush(); process.exit(0) })
+
+    // 写入 session 开始事件，并立即刷盘确保文件创建
     await this.event('session.start', {
       sessionId: this.sessionId,
       startedAt: this.startedAt,
       logFile: fileName,
     })
+    await this.flush()
   }
 
   // ── 核心 API ──────────────────────────────────────────
