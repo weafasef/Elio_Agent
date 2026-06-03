@@ -8,7 +8,7 @@
  *   audit.toolInvoke('Bash', { command: 'ls' })
  *   await audit.shutdown()
  *
- * 日志写入 ~/.claude/log-system/YYYY-MM-DD.jsonl
+ * 日志写入 <项目>/logs/YYYY-MM-DD.jsonl
  * 一天一个文件，同一天多次启动会续写到同一文件。
  * 采用缓冲写入 + 定时刷新，避免阻塞主循环。
  */
@@ -16,7 +16,6 @@
 import { appendFile, mkdir } from 'fs/promises'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
-import { homedir } from 'os'
 import type {
   AuditEvent,
   AuditEventType,
@@ -77,7 +76,7 @@ export class AuditLogger {
     if (sessionId) this.sessionId = sessionId
 
     const logDir =
-      this.config.logDir || join(homedir(), '.claude', 'log-system')
+      this.config.logDir || join(process.cwd(), 'logs')
     await mkdir(logDir, { recursive: true })
 
     // 按天命名文件：如 ~/.claude/log-system/2026-06-04.jsonl
