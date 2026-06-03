@@ -258,6 +258,7 @@ import {
   type RetryContext,
   withRetry,
 } from "./withRetry.js";
+import { getAuditLogger } from "../../log-system/index.js";
 
 // Define a type that represents valid JSON values
 type JsonValue = string | number | boolean | null | JsonObject | JsonArray;
@@ -1884,6 +1885,20 @@ async function* queryModel(
         // BetaMessageStream calls partialParse() on every input_json_delta, which we don't need
         // since we handle tool input accumulation ourselves
         // biome-ignore lint/plugin: main conversation loop handles attribution separately
+        // 审计日志: 记录 API 请求
+        void getAuditLogger().apiRequest({
+          model: params.model,
+          messageCount: params.messages.length,
+          toolCount: Array.isArray(params.tools) ? params.tools.length : 0,
+          toolNames: Array.isArray(params.tools) ? params.tools.map((t: any) => t.name || 'unknown').slice(0, 50) : [],
+          thinkingEnabled: params.thinking?.type !== 'disabled',
+          maxOutputTokens: params.max_tokens,
+          systemPromptChars: typeof params.system === 'string'
+            ? params.system.length
+            : Array.isArray(params.system) ? params.system.reduce((a: number, s: string) => a + s.length, 0) : 0,
+          totalInputChars: JSON.stringify(params.messages).length,
+          requestId: clientRequestId ?? undefined,
+        });
         const result = await anthropic.beta.messages
           .create(
             { ...params, stream: true },
@@ -2235,6 +2250,17 @@ async function* queryModel(
           }
           case "content_block_stop": {
             const contentBlock = contentBlocks[part.index];
+            // 审计日志: 记录思考内容和响应文本（精确时间戳）
+            if (contentBlock && contentBlock.type === 'thinking' && 'thinking' in contentBlock && contentBlock.thinking) {
+              void getAuditLogger().thinking(contentBlock.thinking, streamRequestId ?? undefined);
+            }
+            if (contentBlock && contentBlock.type === 'text' && 'text' in contentBlock && contentBlock.text) {
+              void getAuditLogger().apiResponse(
+                contentBlock.text,
+                partialMessage?.stop_reason ?? 'unknown',
+                streamRequestId ?? undefined,
+              );
+            }
             if (!contentBlock) {
               logEvent("tengu_streaming_error", {
                 error_type:
@@ -2277,6 +2303,15 @@ async function* queryModel(
           }
           case "message_delta": {
             usage = updateUsage(usage, part.usage);
+            // 审计日志: 记录 token 用量
+            void getAuditLogger().apiUsage({
+              inputTokens: usage.input_tokens || 0,
+              outputTokens: usage.output_tokens || 0,
+              cacheReadTokens: usage.cache_read_input_tokens,
+              cacheWriteTokens: usage.cache_creation_input_tokens,
+              costUSD: 0,
+              requestId: streamRequestId ?? undefined,
+            });
             // Capture research from message_delta if available (internal only).
             // Always overwrite with the latest value. Also write back to
             // already-yielded messages since message_delta arrives after
