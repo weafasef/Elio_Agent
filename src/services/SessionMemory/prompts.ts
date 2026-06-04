@@ -15,6 +15,9 @@ _A short and distinctive 5-10 word descriptive title for the session. Super info
 # Current State
 _What is actively being worked on right now? Pending tasks not yet completed. Immediate next steps._
 
+# Emotional Context
+_What was the emotional tone of this conversation? How did the user seem to feel (frustrated, curious, excited, tired, relaxed)? How did you respond to that emotional tone? One or two sentences capturing the emotional texture of the interaction._
+
 # Task specification
 _What did the user ask to build? Any design decisions or other explanatory context_
 
