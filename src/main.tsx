@@ -2602,6 +2602,11 @@ async function run(): Promise<CommanderCommand> {
       return;
     }
 
+    // 初始化审计日志系统（交互模式和 -p 模式都需要，放在分支之前）
+    if (!isBareMode()) {
+      await import('./log-system/integration.js').then(m => m.initLogSystem());
+    }
+
     // --print mode
     if (isNonInteractiveSession) {
       if (outputFormat === 'stream-json' || outputFormat === 'json') {
@@ -2871,11 +2876,10 @@ async function run(): Promise<CommanderCommand> {
       // backgroundHousekeeping (initExtractMemories, pruneShellSnapshots,
       // cleanupOldMessageFiles) and sdkHeapDumpMonitor are all bookkeeping
       // that scripted calls don't need — the next interactive session reconciles.
+      // Headless-only prefetches & bookkeeping
       if (!isBareMode()) {
         startDeferredPrefetches();
         void import('./utils/backgroundHousekeeping.js').then(m => m.startBackgroundHousekeeping());
-        // 初始化审计日志系统（await 确保 -p 模式下日志就绪）
-        await import('./log-system/integration.js').then(m => m.initLogSystem());
         if ("external" === 'ant') {
           void import('./utils/sdkHeapDumpMonitor.js').then(m => m.startSdkMemoryMonitor());
         }

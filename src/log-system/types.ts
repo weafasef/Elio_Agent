@@ -171,7 +171,7 @@ export interface EmotionSnapshotPayload {
 // ── 配置 ──────────────────────────────────────────────
 
 export interface AuditLogConfig {
-  /** 日志根目录 (默认 ~/.claude/log-system/) */
+  /** 日志根目录 (默认为空，init 时用 <项目>/logs/) */
   logDir: string
   /** 是否记录 thinking 内容 (可能很长) */
   captureThinking: boolean

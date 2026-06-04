@@ -13,7 +13,9 @@
  * 采用缓冲写入 + 定时刷新，避免阻塞主循环。
  */
 
-import { appendFile, mkdir } from 'fs/promises'
+import { mkdir, open } from 'fs/promises'
+import { appendFileSync } from 'fs'
+import type { FileHandle } from 'fs/promises'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import type {
@@ -39,9 +41,33 @@ export function initAuditLogger(config?: Partial<AuditLogConfig>): AuditLogger {
   return _instance
 }
 
-// ── 日期工具 ──────────────────────────────────────────
+// ── 时间工具 ──────────────────────────────────────────
 
-/** 生成按天的日志文件名，如 2026-06-04.jsonl */
+/**
+ * 生成本地时间的 ISO 字符串（含时区偏移）。
+ * 与 dailyLogFileName 使用同一时区，确保文件名和内部时间戳一致。
+ *
+ * 示例: 2026-06-04T02:14:33.579+08:00
+ */
+function localISOString(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  const ms = String(date.getMilliseconds()).padStart(3, '0')
+
+  const tzOffset = -date.getTimezoneOffset() // 反转为 UTC+hh 方向
+  const tzSign = tzOffset >= 0 ? '+' : '-'
+  const tzAbs = Math.abs(tzOffset)
+  const tzHours = String(Math.floor(tzAbs / 60)).padStart(2, '0')
+  const tzMinutes = String(tzAbs % 60).padStart(2, '0')
+
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${ms}${tzSign}${tzHours}:${tzMinutes}`
+}
+
+/** 生成按天的日志文件名，如 2026-06-04.jsonl（本地日期） */
 function dailyLogFileName(now: Date): string {
   const y = now.getFullYear()
   const m = String(now.getMonth() + 1).padStart(2, '0')
@@ -60,11 +86,13 @@ export class AuditLogger {
   private buffer: string[] = []
   private flushTimer: ReturnType<typeof setInterval> | null = null
   private initialized = false
+  /** 持久的文件句柄（'a' 追加模式，保证续写不截断） */
+  private fileHandle: FileHandle | null = null
 
   constructor(config?: Partial<AuditLogConfig>) {
     this.config = { ...DEFAULT_AUDIT_CONFIG, ...config }
     this.sessionId = randomUUID()
-    this.startedAt = new Date().toISOString()
+    this.startedAt = localISOString(new Date())
   }
 
   // ── 初始化 ──────────────────────────────────────────
@@ -79,25 +107,34 @@ export class AuditLogger {
       this.config.logDir || join(process.cwd(), 'logs')
     await mkdir(logDir, { recursive: true })
 
-    // 按天命名文件：如 logs/2026-06-04.jsonl
-    const fileName = dailyLogFileName(new Date())
+    // 按天命名文件：如 logs/2026-06-04.jsonl（本地时间）
+    const now = new Date()
+    const fileName = dailyLogFileName(now)
     this.logFilePath = join(logDir, fileName)
+
+    // 以追加模式打开文件句柄，确保每次写入都续写（不截断）
+    this.fileHandle = await open(this.logFilePath, 'a')
+
     this.initialized = true
 
     // 启动定时刷新
     this.flushTimer = setInterval(() => {
-      this.flush().catch(() => {})
+      this.flush().catch(err => {
+        // biome-ignore lint/suspicious/noConsole: 日志系统自身的错误必须可见
+        console.error('[audit] timer flush error:', err)
+      })
     }, this.config.flushIntervalMs)
 
-    // 注册进程退出钩子，确保退出前刷盘（-p 模式进程直接退出，不调 shutdown）
+    // 注册进程退出钩子，确保退出前刷盘
     const gracefulFlush = () => {
-      // 同步写入，确保在进程退出前完成
       if (this.buffer.length === 0) return
       const lines = this.buffer.splice(0)
       try {
-        const { appendFileSync } = require('fs')
         appendFileSync(this.logFilePath, lines.join('\n') + '\n', 'utf8')
-      } catch {}
+      } catch (err) {
+        // biome-ignore lint/suspicious/noConsole: 日志系统自身的错误必须可见
+        console.error('[audit] exit flush error:', err)
+      }
     }
     process.on('exit', gracefulFlush)
     process.on('SIGINT', () => { gracefulFlush(); process.exit(0) })
@@ -108,6 +145,7 @@ export class AuditLogger {
       sessionId: this.sessionId,
       startedAt: this.startedAt,
       logFile: fileName,
+      pid: process.pid,
     })
     await this.flush()
   }
@@ -122,7 +160,7 @@ export class AuditLogger {
     if (!this.initialized) return
 
     const entry: AuditEvent = {
-      timestamp: new Date().toISOString(),
+      timestamp: localISOString(new Date()),
       type,
       sessionId: this.sessionId,
       turn: this.turn || 1,
@@ -146,18 +184,30 @@ export class AuditLogger {
     }
   }
 
-  /** 刷新缓冲区到文件 */
+  /** 刷新缓冲区到文件（通过持有文件句柄的 append 写入） */
   async flush(): Promise<void> {
     if (this.buffer.length === 0) return
     const lines = this.buffer.splice(0)
-    try {
-      await appendFile(this.logFilePath, lines.join('\n') + '\n', 'utf8')
-    } catch (err) {
-      // 静默失败，不阻塞主循环
-      if (process.env.LOG_SYSTEM_DEBUG) {
-        // biome-ignore lint/suspicious/noConsole: 审计日志错误
-        console.error('[audit] flush error:', err)
+    const content = lines.join('\n') + '\n'
+
+    // 优先使用文件句柄（保证续写）
+    if (this.fileHandle) {
+      try {
+        await this.fileHandle.write(content, null, 'utf8')
+        return
+      } catch (err) {
+        // biome-ignore lint/suspicious/noConsole: 日志系统自身的错误必须可见
+        console.error('[audit] fileHandle write error, falling back to appendFileSync:', err)
+        // 句柄可能已损坏，尝试用 appendFileSync 兜底
       }
+    }
+
+    // 兜底：同步追加写入
+    try {
+      appendFileSync(this.logFilePath, content, 'utf8')
+    } catch (err) {
+      // biome-ignore lint/suspicious/noConsole: 日志系统自身的错误必须可见
+      console.error('[audit] appendFileSync fallback error:', err)
     }
   }
 
@@ -270,7 +320,7 @@ export class AuditLogger {
       toolName,
       input,
       isDestructive,
-      startTime: new Date().toISOString(),
+      startTime: localISOString(new Date()),
     })
   }
 
@@ -317,7 +367,7 @@ export class AuditLogger {
     await this.event('personality.snapshot', {
       traits,
       version,
-      sinceLastChange: new Date().toISOString(),
+      sinceLastChange: localISOString(new Date()),
     })
   }
 
@@ -336,13 +386,26 @@ export class AuditLogger {
   async shutdown(): Promise<void> {
     await this.event('session.end', {
       totalTurns: this.turn,
-      endedAt: new Date().toISOString(),
+      endedAt: localISOString(new Date()),
     })
     await this.flush()
+
     if (this.flushTimer) {
       clearInterval(this.flushTimer)
       this.flushTimer = null
     }
+
+    // 关闭文件句柄
+    if (this.fileHandle) {
+      try {
+        await this.fileHandle.close()
+      } catch (err) {
+        // biome-ignore lint/suspicious/noConsole: 日志系统自身的错误必须可见
+        console.error('[audit] error closing file handle:', err)
+      }
+      this.fileHandle = null
+    }
+
     this.initialized = false
   }
 
