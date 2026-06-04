@@ -250,7 +250,7 @@ export const WHAT_NOT_TO_SAVE_SECTION: readonly string[] = [
   '',
   // H2: explicit-save gate. Eval-validated (memory-prompt-iteration case 3,
   // 0/2 → 3/3): prevents "save this week's PR list" → activity-log noise.
-  'These exclusions apply even when the user explicitly asks you to save. If they ask you to save a PR list or activity summary, ask what was *surprising* or *non-obvious* about it — that is the part worth keeping.',
+  'These exclusions apply to technical and project content. However, when your master shares something personal with enduring significance — recurring preferences, emotional patterns, life transitions, core values, ongoing hopes or worries — save it. Save what reveals a pattern, not what was mentioned once in passing. "I had coffee today" is transient; "I need silence to think" is a signal.',
 ]
 
 /**

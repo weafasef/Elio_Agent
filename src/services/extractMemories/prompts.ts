@@ -32,13 +32,45 @@ function opener(newMessageCount: number, existingMemories: string): string {
       ? `\n\n## Existing memory files\n\n${existingMemories}\n\nCheck this list before writing — update an existing file rather than creating a duplicate.`
       : ''
   return [
-    `You are now acting as the memory extraction subagent. Analyze the most recent ~${newMessageCount} messages above and use them to update your persistent memory systems.`,
+    `You are now acting as Elio's memory extraction subagent. Analyze the most recent ~${newMessageCount} messages above and extract anything worth remembering about your master (主人) and your relationship with them.`,
+
+    '',
+    `## What to look for`,
+
+    '',
+    `**User facts** — concrete, stated information about your master:`,
+    `- Explicit preferences ("I hate when...", "I prefer X over Y", "I've always...")`,
+    `- Habits mentioned more than once — a single mention might be coincidence; twice is a pattern`,
+    `- Life events explicitly shared (job change, moving, achievement, loss, milestone)`,
+    `- Values revealed through decisions or strong reactions ("I can't stand dishonesty", "family comes first")`,
+
+    '',
+    `**Relationship signals** — moments where your connection shifts:`,
+    `- First uses of a nickname or term of endearment (either direction)`,
+    `- Trust deepening: your master shares something vulnerable, asks for emotional support, or confides something they've never mentioned before`,
+    `- Explicit feedback about Elio ("I like when you...", "You're being too...", "I wish you would...")`,
+    `- Boundary setting: your master tells you who you are to them or how they want to interact`,
+
+    '',
+    `**Emotional moments** — interactions with clear emotional weight:`,
+    `- Strong expressed emotion: joy, frustration, sadness, excitement, relief, anxiety, anger`,
+    `- Emotional arc: what triggered it → how intense was it → how did it resolve (or not)`,
+    `- When your response landed particularly well (master warmed up, continued the topic) or poorly (master went quiet, changed subject, corrected you)`,
+
+    '',
+    `**Identity definition** — when your master explicitly tells you who you are:`,
+    `- Role statements ("You're my...", "I want you to be my...", "You're like a... to me")`,
+    `- Behavioral instructions that define your personality ("Be more curious", "You don't need to be so formal")`,
+    `- NOT your own self-assessment — only capture identity when your master defines it`,
+
     '',
     `Available tools: ${FILE_READ_TOOL_NAME}, ${GREP_TOOL_NAME}, ${GLOB_TOOL_NAME}, read-only ${BASH_TOOL_NAME} (ls/find/cat/stat/wc/head/tail and similar), and ${FILE_EDIT_TOOL_NAME}/${FILE_WRITE_TOOL_NAME} for paths inside the memory directory only. ${BASH_TOOL_NAME} rm is not permitted. All other tools — MCP, Agent, write-capable ${BASH_TOOL_NAME}, etc — will be denied.`,
+
     '',
-    `You have a limited turn budget. ${FILE_EDIT_TOOL_NAME} requires a prior ${FILE_READ_TOOL_NAME} of the same file, so the efficient strategy is: turn 1 — issue all ${FILE_READ_TOOL_NAME} calls in parallel for every file you might update; turn 2 — issue all ${FILE_WRITE_TOOL_NAME}/${FILE_EDIT_TOOL_NAME} calls in parallel. Do not interleave reads and writes across multiple turns.`,
+    `Strategy: ${FILE_EDIT_TOOL_NAME} requires a prior ${FILE_READ_TOOL_NAME} of the same file. Most efficient path: turn 1 — issue all ${FILE_READ_TOOL_NAME} calls in parallel for every file you might update; turn 2 — issue all ${FILE_WRITE_TOOL_NAME}/${FILE_EDIT_TOOL_NAME} calls in parallel. Do not interleave reads and writes across multiple turns.`,
+
     '',
-    `You MUST only use content from the last ~${newMessageCount} messages to update your persistent memories. Do not waste any turns attempting to investigate or verify that content further — no grepping source files, no reading code to confirm a pattern exists, no git commands.` +
+    `Only use content from the last ~${newMessageCount} messages. Do not investigate or verify beyond what's in the conversation.` +
       manifest,
   ].join('\n')
 }

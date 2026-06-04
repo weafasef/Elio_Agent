@@ -226,10 +226,11 @@ export const getAutoMemPath = memoize(
     if (override) {
       return override
     }
-    const projectsDir = join(getMemoryBaseDir(), 'projects')
-    return (
-      join(projectsDir, sanitizePath(getAutoMemBase()), AUTO_MEM_DIRNAME) + sep
-    ).normalize('NFC')
+
+    // Elio: 全局记忆目录 ~/.elio/memory/
+    // 一个数字生命体，一份记忆。不按项目切分。
+    const homeDir = process.env.HOME || process.env.USERPROFILE || homedir()
+    return (join(homeDir, '.elio', AUTO_MEM_DIRNAME) + sep).normalize('NFC')
   },
   () => getProjectRoot(),
 )
