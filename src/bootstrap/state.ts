@@ -15,7 +15,7 @@ import type { HookCallbackMatcher } from 'src/types/hooks.js'
 // zero circular-dep risk. Path-alias import bypasses bootstrap-isolation
 // (rule only checks ./ and / prefixes); explicit disable documents intent.
 // eslint-disable-next-line custom-rules/bootstrap-isolation
-import { randomUUID } from 'src/utils/crypto.js'
+import { createHash, randomUUID } from 'src/utils/crypto.js'
 import type { ModelSetting } from 'src/utils/model/model.js'
 import type { ModelStrings } from 'src/utils/model/modelStrings.js'
 import type { SettingSource } from 'src/utils/settings/constants.js'
@@ -332,7 +332,7 @@ function getInitialState(): State {
     codeEditToolDecisionCounter: null,
     activeTimeCounter: null,
     statsStore: null,
-    sessionId: randomUUID() as SessionId,
+    sessionId: '' as SessionId, // Determined lazily in getSessionId() — hashed from originalCwd for deterministic single-session
     parentSessionId: undefined,
     // Logger state
     loggerProvider: null,
@@ -428,7 +428,20 @@ function getInitialState(): State {
 // AND ESPECIALLY HERE
 const STATE: State = getInitialState()
 
+/**
+ * Generate a deterministic session ID from a project directory path.
+ * Same directory always produces the same ID, giving Elio one continuous session per project.
+ */
+function deterministicSessionId(cwd: string): string {
+  const hash = createHash('sha256').update(cwd).digest('hex')
+  // Format as UUID v5-style: 8-4-4-4-12
+  return `${hash.slice(0,8)}-${hash.slice(8,12)}-${hash.slice(12,16)}-${hash.slice(16,20)}-${hash.slice(20,32)}`
+}
+
 export function getSessionId(): SessionId {
+  if (!STATE.sessionId) {
+    STATE.sessionId = deterministicSessionId(STATE.originalCwd) as SessionId
+  }
   return STATE.sessionId
 }
 
@@ -442,9 +455,8 @@ export function regenerateSessionId(
   // accumulate stale keys. Callers that need to carry the slug across
   // (REPL.tsx clearContext) read it before calling clearConversation.
   STATE.planSlugCache.delete(STATE.sessionId)
-  // Regenerated sessions live in the current project: reset projectDir to
-  // null so getTranscriptPath() derives from originalCwd.
-  STATE.sessionId = randomUUID() as SessionId
+  // Elio single-session: keep the same deterministic session ID.
+  // /clear resets context but stays within the same continuous conversation.
   STATE.sessionProjectDir = null
   return STATE.sessionId
 }

@@ -88,7 +88,7 @@ import { getOriginalCwd, setAdditionalDirectoriesForClaudeMd, setIsRemoteMode, s
 import { filterCommandsForRemoteMode, getCommands } from './commands.js';
 import { filterCommandsForHeadlessMode } from './commands/headless.js';
 import type { StatsStore } from './context/stats.js';
-import { launchAssistantInstallWizard, launchAssistantSessionChooser, launchInvalidSettingsDialog, launchResumeChooser, launchSnapshotUpdateDialog, launchTeleportRepoMismatchDialog, launchTeleportResumeWrapper } from './dialogLaunchers.js';
+import { launchAssistantInstallWizard, launchAssistantSessionChooser, launchInvalidSettingsDialog, launchSnapshotUpdateDialog, launchTeleportRepoMismatchDialog, launchTeleportResumeWrapper } from './dialogLaunchers.js';
 import { SHOW_CURSOR } from './ink/termio/dec.js';
 import { exitWithError, exitWithMessage, getRenderContext, renderAndRun, showSetupScreens } from './interactiveHelpers.js';
 import { initBuiltinPlugins } from './plugins/bundled/index.js';
@@ -110,7 +110,6 @@ import { buildDeepLinkBanner } from './utils/deepLink/banner.js';
 import { hasNodeOption, isBareMode, isEnvTruthy, isInProtectedNamespace } from './utils/envUtils.js';
 import { refreshExampleCommands } from './utils/exampleCommands.js';
 import type { FpsMetrics } from './utils/fpsTracker.js';
-import { getWorktreePaths } from './utils/getWorktreePaths.js';
 import { findGitRoot, getBranch, getIsGit, getWorktreeCount } from './utils/git.js';
 import { getGhAuthStatus } from './utils/github/ghAuthStatus.js';
 import { safeParseJSON } from './utils/json.js';
@@ -127,7 +126,7 @@ import { getGlobExclusionsForPluginCache } from './utils/plugins/orphanedPluginF
 import { getPluginSeedDirs } from './utils/plugins/pluginDirectories.js';
 import { countFilesRoundedRg } from './utils/ripgrep.js';
 import { processSessionStartHooks, processSetupHooks } from './utils/sessionStart.js';
-import { cacheSessionTitle, getSessionIdFromLog, loadTranscriptFromFile, saveAgentSetting, saveMode, searchSessionsByCustomTitle, sessionIdExists } from './utils/sessionStorage.js';
+import { cacheSessionTitle, saveAgentSetting, saveMode, sessionIdExists } from './utils/sessionStorage.js';
 import { ensureMdmSettingsLoaded } from './utils/settings/mdm/settings.js';
 import { getInitialSettings, getManagedSettingsKeysForLogging, getSettingsForSource, getSettingsWithErrors } from './utils/settings/settings.js';
 import { resetSettingsCache } from './utils/settings/settingsCache.js';
@@ -163,7 +162,7 @@ import { setAllHookEventsEnabled } from 'src/utils/hooks/hookEvents.js';
 import { refreshModelCapabilities } from 'src/utils/model/modelCapabilities.js';
 import { peekForStdinData, writeToStderr } from 'src/utils/process.js';
 import { setCwd } from 'src/utils/Shell.js';
-import { type ProcessedResume, processResumedConversation } from 'src/utils/sessionRestore.js';
+import { processResumedConversation } from 'src/utils/sessionRestore.js';
 import { parseSettingSourcesFlag } from 'src/utils/settings/constants.js';
 import { plural } from 'src/utils/stringUtils.js';
 import { type ChannelEntry, getInitialMainLoopModel, getIsNonInteractiveSession, getSdkBetas, getSessionId, getUserMsgOptIn, setAllowedChannels, setAllowedSettingSources, setChromeFlagOverride, setClientType, setCwdState, setDirectConnectServerUrl, setFlagSettingsPath, setInitialMainLoopModel, setInlinePlugins, setIsInteractive, setKairosActive, setOriginalCwd, setProjectRoot, setQuestionPreviewFormat, setSdkBetas, setSessionBypassPermissionsMode, setSessionPersistenceDisabled, setSessionSource, setUserMsgOptIn, switchSession } from './bootstrap/state.js';
@@ -986,10 +985,10 @@ async function run(): Promise<CommanderCommand> {
       throw new Error('--task-budget must be a positive integer');
     }
     return tokens;
-  }).hideHelp()).option('--replay-user-messages', 'Re-emit user messages from stdin back on stdout for acknowledgment (only works with --input-format=stream-json and --output-format=stream-json)', () => true).addOption(new Option('--enable-auth-status', 'Enable auth status messages in SDK mode').default(false).hideHelp()).option('--allowedTools, --allowed-tools <tools...>', 'Comma or space-separated list of tool names to allow (e.g. "Bash(git:*) Edit")').option('--tools <tools...>', 'Specify the list of available tools from the built-in set. Use "" to disable all tools, "default" to use all tools, or specify tool names (e.g. "Bash,Edit,Read").').option('--disallowedTools, --disallowed-tools <tools...>', 'Comma or space-separated list of tool names to deny (e.g. "Bash(git:*) Edit")').option('--mcp-config <configs...>', 'Load MCP servers from JSON files or strings (space-separated)').addOption(new Option('--permission-prompt-tool <tool>', 'MCP tool to use for permission prompts (only works with --print)').argParser(String).hideHelp()).addOption(new Option('--system-prompt <prompt>', 'System prompt to use for the session').argParser(String)).addOption(new Option('--system-prompt-file <file>', 'Read system prompt from a file').argParser(String).hideHelp()).addOption(new Option('--append-system-prompt <prompt>', 'Append a system prompt to the default system prompt').argParser(String)).addOption(new Option('--append-system-prompt-file <file>', 'Read system prompt from a file and append to the default system prompt').argParser(String).hideHelp()).addOption(new Option('--permission-mode <mode>', 'Permission mode to use for the session').argParser(String).choices(PERMISSION_MODES)).option('-c, --continue', 'Continue the most recent conversation in the current directory', () => true).option('-r, --resume [value]', 'Resume a conversation by session ID, or open interactive picker with optional search term', value => value || true).option('--fork-session', 'When resuming, create a new session ID instead of reusing the original (use with --resume or --continue)', () => true).addOption(new Option('--prefill <text>', 'Pre-fill the prompt input with text without submitting it').hideHelp()).addOption(new Option('--deep-link-origin', 'Signal that this session was launched from a deep link').hideHelp()).addOption(new Option('--deep-link-repo <slug>', 'Repo slug the deep link ?repo= parameter resolved to the current cwd').hideHelp()).addOption(new Option('--deep-link-last-fetch <ms>', 'FETCH_HEAD mtime in epoch ms, precomputed by the deep link trampoline').argParser(v => {
+  }).hideHelp()).option('--replay-user-messages', 'Re-emit user messages from stdin back on stdout for acknowledgment (only works with --input-format=stream-json and --output-format=stream-json)', () => true).addOption(new Option('--enable-auth-status', 'Enable auth status messages in SDK mode').default(false).hideHelp()).option('--allowedTools, --allowed-tools <tools...>', 'Comma or space-separated list of tool names to allow (e.g. "Bash(git:*) Edit")').option('--tools <tools...>', 'Specify the list of available tools from the built-in set. Use "" to disable all tools, "default" to use all tools, or specify tool names (e.g. "Bash,Edit,Read").').option('--disallowedTools, --disallowed-tools <tools...>', 'Comma or space-separated list of tool names to deny (e.g. "Bash(git:*) Edit")').option('--mcp-config <configs...>', 'Load MCP servers from JSON files or strings (space-separated)').addOption(new Option('--permission-prompt-tool <tool>', 'MCP tool to use for permission prompts (only works with --print)').argParser(String).hideHelp()).addOption(new Option('--system-prompt <prompt>', 'System prompt to use for the session').argParser(String)).addOption(new Option('--system-prompt-file <file>', 'Read system prompt from a file').argParser(String).hideHelp()).addOption(new Option('--append-system-prompt <prompt>', 'Append a system prompt to the default system prompt').argParser(String)).addOption(new Option('--append-system-prompt-file <file>', 'Read system prompt from a file and append to the default system prompt').argParser(String).hideHelp()).addOption(new Option('--permission-mode <mode>', 'Permission mode to use for the session').argParser(String).choices(PERMISSION_MODES)).addOption(new Option('--prefill <text>', 'Pre-fill the prompt input with text without submitting it').hideHelp()).addOption(new Option('--deep-link-origin', 'Signal that this session was launched from a deep link').hideHelp()).addOption(new Option('--deep-link-repo <slug>', 'Repo slug the deep link ?repo= parameter resolved to the current cwd').hideHelp()).addOption(new Option('--deep-link-last-fetch <ms>', 'FETCH_HEAD mtime in epoch ms, precomputed by the deep link trampoline').argParser(v => {
     const n = Number(v);
     return Number.isFinite(n) ? n : undefined;
-  }).hideHelp()).option('--from-pr [value]', 'Resume a session linked to a PR by PR number/URL, or open interactive picker with optional search term', value => value || true).option('--no-session-persistence', 'Disable session persistence - sessions will not be saved to disk and cannot be resumed (only works with --print)').addOption(new Option('--resume-session-at <message id>', 'When resuming, only messages up to and including the assistant message with <message.id> (use with --resume in print mode)').argParser(String).hideHelp()).addOption(new Option('--rewind-files <user-message-id>', 'Restore files to state at the specified user message and exit (requires --resume)').hideHelp())
+  }).hideHelp()).option('--no-session-persistence', 'Disable session persistence (only works with --print)')
   // @[MODEL LAUNCH]: Update the example model ID in the --model help text.
   .option('--model <model>', `Model for the current session. Provide an alias for the latest model (e.g. 'sonnet' or 'opus') or a model's full name (e.g. 'claude-sonnet-4-6').`).addOption(new Option('--effort <level>', `Effort level for the current session (low, medium, high, max)`).argParser((rawValue: string) => {
     const value = rawValue.toLowerCase();
@@ -998,7 +997,7 @@ async function run(): Promise<CommanderCommand> {
       throw new InvalidArgumentError(`It must be one of: ${allowed.join(', ')}`);
     }
     return value;
-  })).option('--agent <agent>', `Agent for the current session. Overrides the 'agent' setting.`).option('--betas <betas...>', 'Beta headers to include in API requests (API key users only)').option('--fallback-model <model>', 'Enable automatic fallback to specified model when default model is overloaded (only works with --print)').addOption(new Option('--workload <tag>', 'Workload tag for billing-header attribution (cc_workload). Process-scoped; set by SDK daemon callers that spawn subprocesses for cron work. (only works with --print)').hideHelp()).option('--settings <file-or-json>', 'Path to a settings JSON file or a JSON string to load additional settings from').option('--add-dir <directories...>', 'Additional directories to allow tool access to').option('--ide', 'Automatically connect to IDE on startup if exactly one valid IDE is available', () => true).option('--strict-mcp-config', 'Only use MCP servers from --mcp-config, ignoring all other MCP configurations', () => true).option('--session-id <uuid>', 'Use a specific session ID for the conversation (must be a valid UUID)').option('-n, --name <name>', 'Set a display name for this session (shown in /resume and terminal title)').option('--agents <json>', 'JSON object defining custom agents (e.g. \'{"reviewer": {"description": "Reviews code", "prompt": "You are a code reviewer"}}\')').option('--setting-sources <sources>', 'Comma-separated list of setting sources to load (user, project, local).')
+  })).option('--agent <agent>', `Agent for the current session. Overrides the 'agent' setting.`).option('--betas <betas...>', 'Beta headers to include in API requests (API key users only)').option('--fallback-model <model>', 'Enable automatic fallback to specified model when default model is overloaded (only works with --print)').addOption(new Option('--workload <tag>', 'Workload tag for billing-header attribution (cc_workload). Process-scoped; set by SDK daemon callers that spawn subprocesses for cron work. (only works with --print)').hideHelp()).option('--settings <file-or-json>', 'Path to a settings JSON file or a JSON string to load additional settings from').option('--add-dir <directories...>', 'Additional directories to allow tool access to').option('--ide', 'Automatically connect to IDE on startup if exactly one valid IDE is available', () => true).option('--strict-mcp-config', 'Only use MCP servers from --mcp-config, ignoring all other MCP configurations', () => true).option('--session-id <uuid>', 'Use a specific session ID for the conversation (must be a valid UUID)').option('-n, --name <name>', 'Set a display name for this session (shown in terminal title)').option('--agents <json>', 'JSON object defining custom agents (e.g. \'{"reviewer": {"description": "Reviews code", "prompt": "You are a code reviewer"}}\')').option('--setting-sources <sources>', 'Comma-separated list of setting sources to load (user, project, local).')
   // gh-33508: <paths...> (variadic) consumed everything until the next
   // --flag. `claude --plugin-dir /path mcp add --transport http` swallowed
   // `mcp` and `add` as paths, then choked on --transport as an unknown
@@ -1279,14 +1278,7 @@ async function run(): Promise<CommanderCommand> {
 
     // Validate session ID if provided
     if (sessionId) {
-      // Check for conflicting flags
-      // --session-id can be used with --continue or --resume when --fork-session is also provided
-      // (to specify a custom ID for the forked session)
-      if ((options.continue || options.resume) && !options.forkSession) {
-        process.stderr.write(chalk.red('Error: --session-id can only be used with --continue or --resume if --fork-session is also specified.\n'));
-        process.exit(1);
-      }
-
+      // Elio single-session: --session-id overrides the deterministic project-based ID.
       // When --sdk-url is provided (bridge/remote mode), the session ID is a
       // server-assigned tagged ID (e.g. "session_local_01...") rather than a
       // UUID. Skip UUID validation and local existence checks in that case.
@@ -2451,11 +2443,9 @@ async function run(): Promise<CommanderCommand> {
     }));
 
     // Start hooks early so they run in parallel with MCP connections.
-    // Skip for initOnly/init/maintenance (handled separately), non-interactive
-    // (handled via setupTrigger), and resume/continue (conversationRecovery.ts
-    // fires 'resume' instead — without this guard, hooks fire TWICE on /resume
-    // and the second systemMessage clobbers the first. gh-30825)
-    const hooksPromise = initOnly || init || maintenance || isNonInteractiveSession || options.continue || options.resume ? null : processSessionStartHooks('startup', {
+    // Skip for initOnly/init/maintenance (handled separately) and non-interactive
+    // (handled via setupTrigger).
+    const hooksPromise = initOnly || init || maintenance || isNonInteractiveSession ? null : processSessionStartHooks('startup', {
       agentType: mainThreadAgentDefinition?.agentType,
       model: resolvedInitialModel
     });
@@ -2628,12 +2618,11 @@ async function run(): Promise<CommanderCommand> {
       // Kick SessionStart hooks now so the subprocess spawn overlaps with
       // MCP connect + plugin init + print.ts import below. loadInitialMessages
       // joins this at print.ts:4397. Guarded same as loadInitialMessages —
-      // continue/resume/teleport paths don't fire startup hooks (or fire them
-      // conditionally inside the resume branch, where this promise is
-      // undefined and the ?? fallback runs). Also skip when setupTrigger is
-      // set — those paths run setup hooks first (print.ts:544), and session
-      // start hooks must wait until setup completes.
-      const sessionStartHooksPromise = options.continue || options.resume || teleport || setupTrigger ? undefined : processSessionStartHooks('startup');
+      // Teleport paths don't fire startup hooks (they fire conditionally inside
+      // the teleport branch). Also skip when setupTrigger is set — those paths
+      // run setup hooks first (print.ts:544), and session start hooks must wait
+      // until setup completes.
+      const sessionStartHooksPromise = teleport || setupTrigger ? undefined : processSessionStartHooks('startup');
       // Suppress transient unhandledRejection if this rejects before
       // loadInitialMessages awaits it. Downstream await still observes the
       // rejection — this just prevents the spurious global handler fire.
@@ -2894,8 +2883,6 @@ async function run(): Promise<CommanderCommand> {
       } = await import('src/cli/print.js');
       profileCheckpoint('after_print_import');
       void runHeadless(inputPrompt, () => headlessStore.getState(), headlessStore.setState, commandsHeadless, tools, sdkMcpConfigs, agentDefinitions.activeAgents, {
-        continue: options.continue,
-        resume: options.resume,
         verbose: verbose,
         outputFormat: outputFormat,
         jsonSchema,
@@ -2915,9 +2902,6 @@ async function run(): Promise<CommanderCommand> {
         sdkUrl,
         replayUserMessages: effectiveReplayUserMessages,
         includePartialMessages: effectiveIncludePartialMessages,
-        forkSession: options.forkSession || false,
-        resumeSessionAt: options.resumeSessionAt || undefined,
-        rewindFiles: options.rewindFiles,
         enableAuthStatus: options.enableAuthStatus,
         agent: agentCli,
         workload: options.workload,
@@ -3156,71 +3140,7 @@ async function run(): Promise<CommanderCommand> {
       })
     };
 
-    // Shared context for processResumedConversation calls
-    const resumeContext = {
-      modeApi: coordinatorModeModule,
-      mainThreadAgentDefinition,
-      agentDefinitions,
-      currentCwd,
-      cliAgents,
-      initialState
-    };
-    if (options.continue) {
-      // Continue the most recent conversation directly
-      let resumeSucceeded = false;
-      try {
-        const resumeStart = performance.now();
-
-        // Clear stale caches before resuming to ensure fresh file/skill discovery
-        const {
-          clearSessionCaches
-        } = await import('./commands/clear/caches.js');
-        clearSessionCaches();
-        const result = await loadConversationForResume(undefined /* sessionId */, undefined /* sourceFile */);
-        if (!result) {
-          logEvent('tengu_continue', {
-            success: false
-          });
-          return await exitWithError(root, 'No conversation found to continue');
-        }
-        const loaded = await processResumedConversation(result, {
-          forkSession: !!options.forkSession,
-          includeAttribution: true,
-          transcriptPath: result.fullPath
-        }, resumeContext);
-        if (loaded.restoredAgentDef) {
-          mainThreadAgentDefinition = loaded.restoredAgentDef;
-        }
-        maybeActivateProactive(options);
-        maybeActivateBrief(options);
-        logEvent('tengu_continue', {
-          success: true,
-          resume_duration_ms: Math.round(performance.now() - resumeStart)
-        });
-        resumeSucceeded = true;
-        await launchRepl(root, {
-          getFpsMetrics,
-          stats,
-          initialState: loaded.initialState
-        }, {
-          ...sessionConfig,
-          mainThreadAgentDefinition: loaded.restoredAgentDef ?? mainThreadAgentDefinition,
-          initialMessages: loaded.messages,
-          initialFileHistorySnapshots: loaded.fileHistorySnapshots,
-          initialContentReplacements: loaded.contentReplacements,
-          initialAgentName: loaded.agentName,
-          initialAgentColor: loaded.agentColor
-        }, renderAndRun);
-      } catch (error) {
-        if (!resumeSucceeded) {
-          logEvent('tengu_continue', {
-            success: false
-          });
-        }
-        logError(error);
-        process.exit(1);
-      }
-    } else if (feature('DIRECT_CONNECT') && _pendingConnect?.url) {
+    if (feature('DIRECT_CONNECT') && _pendingConnect?.url) {
       // `claude connect <url>` — full interactive TUI connected to a remote server
       let directConnectConfig;
       try {
@@ -3419,51 +3339,9 @@ async function run(): Promise<CommanderCommand> {
         thinkingConfig
       }, renderAndRun);
       return;
-    } else if (options.resume || options.fromPr || teleport || remote !== null) {
-      // Handle resume flow - from file (ant-only), session ID, or interactive selector
-
-      // Clear stale caches before resuming to ensure fresh file/skill discovery
-      const {
-        clearSessionCaches
-      } = await import('./commands/clear/caches.js');
-      clearSessionCaches();
+    } else if (teleport || remote !== null) {
+      // Handle teleport and remote session flows (Claude Code Web / CCR sessions)
       let messages: MessageType[] | null = null;
-      let processedResume: ProcessedResume | undefined = undefined;
-      let maybeSessionId = validateUuid(options.resume);
-      let searchTerm: string | undefined = undefined;
-      // Store full LogOption when found by custom title (for cross-worktree resume)
-      let matchedLog: LogOption | null = null;
-      // PR filter for --from-pr flag
-      let filterByPr: boolean | number | string | undefined = undefined;
-
-      // Handle --from-pr flag
-      if (options.fromPr) {
-        if (options.fromPr === true) {
-          // Show all sessions with linked PRs
-          filterByPr = true;
-        } else if (typeof options.fromPr === 'string') {
-          // Could be a PR number or URL
-          filterByPr = options.fromPr;
-        }
-      }
-
-      // If resume value is not a UUID, try exact match by custom title first
-      if (options.resume && typeof options.resume === 'string' && !maybeSessionId) {
-        const trimmedValue = options.resume.trim();
-        if (trimmedValue) {
-          const matches = await searchSessionsByCustomTitle(trimmedValue, {
-            exact: true
-          });
-          if (matches.length === 1) {
-            // Exact match found - store full LogOption for cross-worktree resume
-            matchedLog = matches[0]!;
-            maybeSessionId = getSessionIdFromLog(matchedLog) ?? null;
-          } else {
-            // No match or multiple matches - use as search term for picker
-            searchTerm = trimmedValue;
-          }
-        }
-      }
 
       // --remote and --teleport both create/resume Claude Code Web (CCR) sessions.
       // Remote Control (--rc) is a separate feature gated in initReplBridge.ts.
@@ -3645,132 +3523,6 @@ async function run(): Promise<CommanderCommand> {
           }
         }
       }
-      if ("external" === 'ant') {
-        if (options.resume && typeof options.resume === 'string' && !maybeSessionId) {
-          // Check for ccshare URL (e.g. https://go/ccshare/boris-20260311-211036)
-          const {
-            parseCcshareId,
-            loadCcshare
-          } = await import('./utils/ccshareResume.js');
-          const ccshareId = parseCcshareId(options.resume);
-          if (ccshareId) {
-            try {
-              const resumeStart = performance.now();
-              const logOption = await loadCcshare(ccshareId);
-              const result = await loadConversationForResume(logOption, undefined);
-              if (result) {
-                processedResume = await processResumedConversation(result, {
-                  forkSession: true,
-                  transcriptPath: result.fullPath
-                }, resumeContext);
-                if (processedResume.restoredAgentDef) {
-                  mainThreadAgentDefinition = processedResume.restoredAgentDef;
-                }
-                logEvent('tengu_session_resumed', {
-                  entrypoint: 'ccshare' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-                  success: true,
-                  resume_duration_ms: Math.round(performance.now() - resumeStart)
-                });
-              } else {
-                logEvent('tengu_session_resumed', {
-                  entrypoint: 'ccshare' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-                  success: false
-                });
-              }
-            } catch (error) {
-              logEvent('tengu_session_resumed', {
-                entrypoint: 'ccshare' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-                success: false
-              });
-              logError(error);
-              await exitWithError(root, `Unable to resume from ccshare: ${errorMessage(error)}`, () => gracefulShutdown(1));
-            }
-          } else {
-            const resolvedPath = resolve(options.resume);
-            try {
-              const resumeStart = performance.now();
-              let logOption;
-              try {
-                // Attempt to load as a transcript file; ENOENT falls through to session-ID handling
-                logOption = await loadTranscriptFromFile(resolvedPath);
-              } catch (error) {
-                if (!isENOENT(error)) throw error;
-                // ENOENT: not a file path — fall through to session-ID handling
-              }
-              if (logOption) {
-                const result = await loadConversationForResume(logOption, undefined /* sourceFile */);
-                if (result) {
-                  processedResume = await processResumedConversation(result, {
-                    forkSession: !!options.forkSession,
-                    transcriptPath: result.fullPath
-                  }, resumeContext);
-                  if (processedResume.restoredAgentDef) {
-                    mainThreadAgentDefinition = processedResume.restoredAgentDef;
-                  }
-                  logEvent('tengu_session_resumed', {
-                    entrypoint: 'file' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-                    success: true,
-                    resume_duration_ms: Math.round(performance.now() - resumeStart)
-                  });
-                } else {
-                  logEvent('tengu_session_resumed', {
-                    entrypoint: 'file' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-                    success: false
-                  });
-                }
-              }
-            } catch (error) {
-              logEvent('tengu_session_resumed', {
-                entrypoint: 'file' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-                success: false
-              });
-              logError(error);
-              await exitWithError(root, `Unable to load transcript from file: ${options.resume}`, () => gracefulShutdown(1));
-            }
-          }
-        }
-      }
-
-      // If not loaded as a file, try as session ID
-      if (maybeSessionId) {
-        // Resume specific session by ID
-        const sessionId = maybeSessionId;
-        try {
-          const resumeStart = performance.now();
-          // Use matchedLog if available (for cross-worktree resume by custom title)
-          // Otherwise fall back to sessionId string (for direct UUID resume)
-          const result = await loadConversationForResume(matchedLog ?? sessionId, undefined);
-          if (!result) {
-            logEvent('tengu_session_resumed', {
-              entrypoint: 'cli_flag' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-              success: false
-            });
-            return await exitWithError(root, `No conversation found with session ID: ${sessionId}`);
-          }
-          const fullPath = matchedLog?.fullPath ?? result.fullPath;
-          processedResume = await processResumedConversation(result, {
-            forkSession: !!options.forkSession,
-            sessionIdOverride: sessionId,
-            transcriptPath: fullPath
-          }, resumeContext);
-          if (processedResume.restoredAgentDef) {
-            mainThreadAgentDefinition = processedResume.restoredAgentDef;
-          }
-          logEvent('tengu_session_resumed', {
-            entrypoint: 'cli_flag' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-            success: true,
-            resume_duration_ms: Math.round(performance.now() - resumeStart)
-          });
-        } catch (error) {
-          logEvent('tengu_session_resumed', {
-            entrypoint: 'cli_flag' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-            success: false
-          });
-          logError(error);
-          await exitWithError(root, `Failed to resume session ${sessionId}`);
-        }
-      }
-
       // Await file downloads before rendering REPL (files must be available)
       if (fileDownloadPromise) {
         try {
@@ -3784,93 +3536,105 @@ async function run(): Promise<CommanderCommand> {
         }
       }
 
-      // If we have a processed resume or teleport messages, render the REPL
-      const resumeData = processedResume ?? (Array.isArray(messages) ? {
-        messages,
-        fileHistorySnapshots: undefined,
-        agentName: undefined,
-        agentColor: undefined as AgentColorName | undefined,
-        restoredAgentDef: mainThreadAgentDefinition,
-        initialState,
-        contentReplacements: undefined
-      } : undefined);
-      if (resumeData) {
+      // Render REPL with teleport messages
+      if (Array.isArray(messages)) {
         maybeActivateProactive(options);
         maybeActivateBrief(options);
         await launchRepl(root, {
           getFpsMetrics,
           stats,
-          initialState: resumeData.initialState
+          initialState
         }, {
           ...sessionConfig,
-          mainThreadAgentDefinition: resumeData.restoredAgentDef ?? mainThreadAgentDefinition,
-          initialMessages: resumeData.messages,
-          initialFileHistorySnapshots: resumeData.fileHistorySnapshots,
-          initialContentReplacements: resumeData.contentReplacements,
-          initialAgentName: resumeData.agentName,
-          initialAgentColor: resumeData.agentColor
+          mainThreadAgentDefinition,
+          initialMessages: messages,
+        }, renderAndRun);
+      }
+    } else {
+      // Elio single-session: always auto-continue the most recent conversation
+      // in the current project. Falls back to fresh welcome if no session exists.
+      const resumeContext = {
+        modeApi: coordinatorModeModule,
+        mainThreadAgentDefinition,
+        agentDefinitions,
+        currentCwd,
+        cliAgents,
+        initialState
+      };
+      const {
+        clearSessionCaches
+      } = await import('./commands/clear/caches.js');
+      clearSessionCaches();
+
+      const result = await loadConversationForResume(undefined /* sessionId */, undefined /* sourceFile */);
+      if (result) {
+        const loaded = await processResumedConversation(result, {
+          includeAttribution: true,
+          transcriptPath: result.fullPath
+        }, resumeContext);
+        if (loaded.restoredAgentDef) {
+          mainThreadAgentDefinition = loaded.restoredAgentDef;
+        }
+        maybeActivateProactive(options);
+        maybeActivateBrief(options);
+        await launchRepl(root, {
+          getFpsMetrics,
+          stats,
+          initialState: loaded.initialState
+        }, {
+          ...sessionConfig,
+          mainThreadAgentDefinition: loaded.restoredAgentDef ?? mainThreadAgentDefinition,
+          initialMessages: loaded.messages,
+          initialFileHistorySnapshots: loaded.fileHistorySnapshots,
+          initialContentReplacements: loaded.contentReplacements,
+          initialAgentName: loaded.agentName,
+          initialAgentColor: loaded.agentColor
         }, renderAndRun);
       } else {
-        // Show interactive selector (includes same-repo worktrees)
-        // Note: ResumeConversation loads logs internally to ensure proper GC after selection
-        await launchResumeChooser(root, {
+        // No previous session — show fresh welcome screen
+        const pendingHookMessages = hooksPromise && hookMessages.length === 0 ? hooksPromise : undefined;
+        profileCheckpoint('action_after_hooks');
+        maybeActivateProactive(options);
+        maybeActivateBrief(options);
+        // Persist the current mode for fresh sessions so auto-continue knows what mode was used
+        if (feature('COORDINATOR_MODE')) {
+          saveMode(coordinatorModeModule?.isCoordinatorMode() ? 'coordinator' : 'normal');
+        }
+
+        // If launched via a deep link, show a provenance banner so the user
+        // knows the session originated externally. Linux xdg-open and
+        // browsers with "always allow" set dispatch the link with no OS-level
+        // confirmation, so this is the only signal the user gets that the
+        // prompt — and the working directory / CLAUDE.md it implies — came
+        // from an external source rather than something they typed.
+        let deepLinkBanner: ReturnType<typeof createSystemMessage> | null = null;
+        if (feature('LODESTONE')) {
+          if (options.deepLinkOrigin) {
+            logEvent('tengu_deep_link_opened', {
+              has_prefill: Boolean(options.prefill),
+              has_repo: Boolean(options.deepLinkRepo)
+            });
+            deepLinkBanner = createSystemMessage(buildDeepLinkBanner({
+              cwd: getCwd(),
+              prefillLength: options.prefill?.length,
+              repo: options.deepLinkRepo,
+              lastFetch: options.deepLinkLastFetch !== undefined ? new Date(options.deepLinkLastFetch) : undefined
+            }), 'warning');
+          } else if (options.prefill) {
+            deepLinkBanner = createSystemMessage('Launched with a pre-filled prompt — review it before pressing Enter.', 'warning');
+          }
+        }
+        const initialMessages = deepLinkBanner ? [deepLinkBanner, ...hookMessages] : hookMessages.length > 0 ? hookMessages : undefined;
+        await launchRepl(root, {
           getFpsMetrics,
           stats,
           initialState
-        }, getWorktreePaths(getOriginalCwd()), {
+        }, {
           ...sessionConfig,
-          initialSearchQuery: searchTerm,
-          forkSession: options.forkSession,
-          filterByPr
-        });
+          initialMessages,
+          pendingHookMessages
+        }, renderAndRun);
       }
-    } else {
-      // Pass unresolved hooks promise to REPL so it can render immediately
-      // instead of blocking ~500ms waiting for SessionStart hooks to finish.
-      // REPL will inject hook messages when they resolve and await them before
-      // the first API call so the model always sees hook context.
-      const pendingHookMessages = hooksPromise && hookMessages.length === 0 ? hooksPromise : undefined;
-      profileCheckpoint('action_after_hooks');
-      maybeActivateProactive(options);
-      maybeActivateBrief(options);
-      // Persist the current mode for fresh sessions so future resumes know what mode was used
-      if (feature('COORDINATOR_MODE')) {
-        saveMode(coordinatorModeModule?.isCoordinatorMode() ? 'coordinator' : 'normal');
-      }
-
-      // If launched via a deep link, show a provenance banner so the user
-      // knows the session originated externally. Linux xdg-open and
-      // browsers with "always allow" set dispatch the link with no OS-level
-      // confirmation, so this is the only signal the user gets that the
-      // prompt — and the working directory / CLAUDE.md it implies — came
-      // from an external source rather than something they typed.
-      let deepLinkBanner: ReturnType<typeof createSystemMessage> | null = null;
-      if (feature('LODESTONE')) {
-        if (options.deepLinkOrigin) {
-          logEvent('tengu_deep_link_opened', {
-            has_prefill: Boolean(options.prefill),
-            has_repo: Boolean(options.deepLinkRepo)
-          });
-          deepLinkBanner = createSystemMessage(buildDeepLinkBanner({
-            cwd: getCwd(),
-            prefillLength: options.prefill?.length,
-            repo: options.deepLinkRepo,
-            lastFetch: options.deepLinkLastFetch !== undefined ? new Date(options.deepLinkLastFetch) : undefined
-          }), 'warning');
-        } else if (options.prefill) {
-          deepLinkBanner = createSystemMessage('Launched with a pre-filled prompt — review it before pressing Enter.', 'warning');
-        }
-      }
-      const initialMessages = deepLinkBanner ? [deepLinkBanner, ...hookMessages] : hookMessages.length > 0 ? hookMessages : undefined;
-      await launchRepl(root, {
-        getFpsMetrics,
-        stats,
-        initialState
-      }, {
-        ...sessionConfig,
-        initialMessages,
-        pendingHookMessages
-      }, renderAndRun);
     }
   }).version(`${MACRO.VERSION} (Claude Code)`, '-v, --version', 'Output the version number');
 

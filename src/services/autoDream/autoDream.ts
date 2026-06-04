@@ -31,7 +31,6 @@ import {
   getOriginalCwd,
   getKairosActive,
   getIsRemoteMode,
-  getSessionId,
 } from '../../bootstrap/state.js'
 import { createAutoMemCanUseTool } from '../extractMemories/extractMemories.js'
 import { buildConsolidationPrompt } from './consolidationPrompt.js'
@@ -62,7 +61,7 @@ type AutoDreamConfig = {
 
 const DEFAULTS: AutoDreamConfig = {
   minHours: 24,
-  minSessions: 5,
+  minSessions: 1, // Elio single-session: one continuous conversation per project
 }
 
 /**
@@ -160,9 +159,9 @@ export function initAutoDream(): void {
       )
       return
     }
-    // Exclude the current session (its mtime is always recent).
-    const currentSession = getSessionId()
-    sessionIds = sessionIds.filter(id => id !== currentSession)
+    // Elio single-session: the current session IS the data source.
+    // Don't exclude it — with a deterministic session ID, the same
+    // conversation accumulates messages that need periodic consolidation.
     if (!force && sessionIds.length < cfg.minSessions) {
       logForDebugging(
         `[autoDream] skip — ${sessionIds.length} sessions since last consolidation, need ${cfg.minSessions}`,
