@@ -2607,6 +2607,9 @@ async function run(): Promise<CommanderCommand> {
       await import('./log-system/integration.js').then(m => m.initLogSystem());
     }
 
+    // 初始化 Elio 人格系统
+    await import('./elio/index.js').then(m => m.initElio());
+
     // --print mode
     if (isNonInteractiveSession) {
       if (outputFormat === 'stream-json' || outputFormat === 'json') {

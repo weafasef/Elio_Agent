@@ -56,6 +56,7 @@ import {
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../analytics/growthbook.js'
 import { logEvent } from '../analytics/index.js'
 import { sanitizeToolNameForAnalytics } from '../analytics/metadata.js'
+import { scanAndApplyAdjustments } from '../../elio/autoAdjust.js'
 import {
   buildExtractAutoOnlyPrompt,
   buildExtractCombinedPrompt,
@@ -493,6 +494,15 @@ export function initExtractMemories(): void {
           msg.teamCount = teamCount
         }
         appendSystemMessage?.(msg)
+      }
+
+      // Scan newly written/edited memory files for trait adjustments
+      // and apply them. Fire-and-forget — adjustments are best-effort.
+      const applied = await scanAndApplyAdjustments(memoryDir)
+      if (applied > 0) {
+        logForDebugging(
+          `[extractMemories] applied ${applied} trait adjustment(s)`,
+        )
       }
     } catch (error) {
       // Extraction is best-effort — log but don't notify on error
