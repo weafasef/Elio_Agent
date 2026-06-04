@@ -13,6 +13,11 @@ LITELLM_PORT="4000"
 LITELLM_PID_FILE="/tmp/cc-haha-litellm.pid"
 
 start_litellm() {
+  # Source .env to pick up ANTHROPIC_BASE_URL at bash level
+  # (Bun loads .env automatically, but bash doesn't)
+  if [[ -f "$ROOT_DIR/.env" ]]; then
+    set -a; source "$ROOT_DIR/.env"; set +a
+  fi
   local url="${ANTHROPIC_BASE_URL:-}"
   if [[ "$url" != http://localhost:$LITELLM_PORT* && "$url" != http://127.0.0.1:$LITELLM_PORT* ]]; then
     return 0  # Not using local litellm, skip
