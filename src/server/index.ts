@@ -23,6 +23,7 @@ import { OPENAI_CODEX_REDIRECT_PATH } from '../services/openaiAuth/client.js'
 import { ensureDesktopCliLauncherInstalled } from './services/desktopCliLauncherService.js'
 import { enableConfigs } from '../utils/config.js'
 import { diagnosticsService } from './services/diagnosticsService.js'
+import { startHeartbeat, stopHeartbeat } from './services/heartbeatService.js'
 import { ensurePersistentStorageUpgraded } from './services/persistentStorageMigrations.js'
 import { handleStaticH5Request } from './staticH5.js'
 import { classifyH5Request, shouldBlockDisabledH5Access, shouldRequireH5Token } from './h5AccessPolicy.js'
@@ -443,6 +444,9 @@ export function startServer(port = PORT, host = HOST) {
   // Start the cron scheduler to execute scheduled tasks
   cronScheduler.start()
 
+  // Start Elio's heartbeat — keeps her continuously working
+  startHeartbeat(serverPort)
+
   void ensureDesktopCliLauncherInstalled().catch((error) => {
     console.error(
         '[desktop-cli-launcher] failed to install bundled launcher:',
@@ -459,6 +463,7 @@ export function startServer(port = PORT, host = HOST) {
 let shutdownInProgress: Promise<void> | null = null
 
 function cleanupAllSessions() {
+  stopHeartbeat()
   const active = conversationService.getActiveSessions()
   if (active.length > 0) {
     console.log(`[Server] Shutting down — killing ${active.length} CLI subprocess(es)`)
@@ -467,6 +472,7 @@ function cleanupAllSessions() {
 }
 
 async function cleanupAllSessionsAndWait() {
+  stopHeartbeat()
   const active = conversationService.getActiveSessions()
   if (active.length > 0) {
     console.log(`[Server] Shutting down — killing ${active.length} CLI subprocess(es)`)
