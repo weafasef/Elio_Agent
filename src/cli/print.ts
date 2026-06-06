@@ -50,6 +50,7 @@ import {
   getCommandsByMaxPriority,
 } from 'src/utils/messageQueueManager.js'
 import { notifyCommandLifecycle } from 'src/utils/commandLifecycle.js'
+import { setWorldview, setLastUserMessage } from '../elio/worldview.js'
 import {
   getSessionState,
   notifySessionStateChanged,
@@ -4060,7 +4061,7 @@ function runHeadlessStreaming(
       }
       // After handling control, keep-alive, env-var, assistant, and system
       // messages above, only user messages should remain.
-      if (message.type !== 'user') {
+      if (message.type !== 'user' && message.type !== 'worldview') {
         continue
       }
 
@@ -4107,11 +4108,26 @@ function runHeadlessStreaming(
         trackReceivedMessageUuid(message.uuid)
       }
 
+      // Store worldview / user message for system prompt injection
+      if (message.type === 'worldview') {
+        setWorldview((message as any).worldview ?? null)
+      } else if (message.type === 'user') {
+        const userContent = message.message.content
+        const userText = typeof userContent === 'string'
+          ? userContent
+          : Array.isArray(userContent)
+            ? userContent.find((b: any) => b?.type === 'text')?.text || ''
+            : ''
+        setLastUserMessage(userText || null)
+      }
+
       enqueue({
         mode: 'prompt' as const,
-        // file_attachments rides the protobuf catchall from the web composer.
-        // Same-ref no-op when absent (no 'file_attachments' key).
-        value: await resolveAndPrepend(message, message.message.content),
+        // Worldview: no user input needed (context is in system prompt)
+        // User: normal message content
+        value: message.type === 'worldview'
+          ? ''
+          : await resolveAndPrepend(message, message.message.content),
         uuid: message.uuid,
         priority: message.priority,
       })

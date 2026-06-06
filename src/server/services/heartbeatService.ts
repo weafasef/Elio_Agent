@@ -24,10 +24,12 @@ let busy = false
 let port = 0
 let safetyTimer: ReturnType<typeof setTimeout> | null = null
 let sessionReady = false
+let startTime: number | null = null
 
 export function startHeartbeat(serverPort: number): void {
   if (intervalId) return
   port = serverPort
+  startTime = Date.now()
   intervalId = setInterval(tick, INTERVAL_MS)
   console.log('[Heartbeat] Started')
 }
@@ -37,10 +39,33 @@ export function stopHeartbeat(): void {
   killSession()
   busy = false
   sessionReady = false
+  startTime = null
   console.log('[Heartbeat] Stopped')
 }
 
 // ── Internal ────────────────────────────────────────────────────────────
+
+function buildWorldview(): string {
+  const now = new Date()
+  const timeStr = now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+  const hour = now.getHours()
+  let timeOfDay: string
+  if (hour >= 0 && hour < 6) timeOfDay = '深夜'
+  else if (hour >= 6 && hour < 9) timeOfDay = '清晨'
+  else if (hour >= 9 && hour < 12) timeOfDay = '上午'
+  else if (hour >= 12 && hour < 14) timeOfDay = '午后'
+  else if (hour >= 14 && hour < 18) timeOfDay = '下午'
+  else if (hour >= 18 && hour < 21) timeOfDay = '傍晚'
+  else timeOfDay = '夜晚'
+
+  const elapsedMin = startTime ? Math.floor((Date.now() - startTime) / 60_000) : 0
+
+  return [
+    `当前时间: ${timeStr}（${timeOfDay}）`,
+    `本次持续运行: ${elapsedMin} 分钟`,
+    `你可以自主决定做点什么——写日记、整理记忆、安静待着。`,
+  ].join('\n')
+}
 
 async function tick(): Promise<void> {
   if (busy) return
@@ -53,15 +78,13 @@ async function tick(): Promise<void> {
       sessionReady = true
     }
 
-    const sent = await conversationService.sendMessage(
-      SESSION_ID,
-      'Elio，在空闲时间里，随便写点东西到 D:\\VS_python\\Elio_Agent\\work.md，什么都行，不用太长。',
-    )
+    const worldview = buildWorldview()
+    const sent = conversationService.sendWorldview(SESSION_ID, worldview)
     if (!sent) {
       busy = false
       return
     }
-    console.log('[Heartbeat] Task submitted')
+    console.log('[Heartbeat] Worldview sent')
 
     safetyTimer = setTimeout(() => {
       console.warn('[Heartbeat] Task timed out — resetting')
@@ -161,25 +184,44 @@ function isKnownRuntimeProviderId(
   )
 }
 
-let streamEventLogged = false
-
 function onOutput(msg: any): void {
+  const content = extractContent(msg)
+
   if (msg?.type === 'result') {
     busy = false
-    streamEventLogged = false
     if (safetyTimer) {
       clearTimeout(safetyTimer)
       safetyTimer = null
     }
-    console.log(`[Heartbeat] result: is_error=${msg.is_error}`)
+    console.log(`[Heartbeat] result: is_error=${msg.is_error}, tokens=${msg.usage?.input_tokens ?? 0}+${msg.usage?.output_tokens ?? 0}`)
+  } else if (msg?.type === 'assistant') {
+    if (content) console.log(`[Heartbeat] Elio: ${truncate(content)}`)
   } else if (msg?.type === 'stream_event') {
-    if (!streamEventLogged) {
-      streamEventLogged = true
-      console.log('[Heartbeat] msg: type=stream_event (suppressing further)')
-    }
+    // skip — partial chunks; final text logged by assistant event
   } else {
-    console.log(`[Heartbeat] msg: type=${msg?.type}, subtype=${msg?.subtype || '-'}`)
+    const subtype = msg?.subtype || '-'
+    const c = content ? ` — ${truncate(content)}` : ''
+    console.log(`[Heartbeat] msg: type=${msg?.type}, subtype=${subtype}${c}`)
   }
+}
+
+function extractContent(msg: any): string | null {
+  if (msg?.event?.content_block?.text) return msg.event.content_block.text
+  if (msg?.message?.content) {
+    const blocks = Array.isArray(msg.message.content) ? msg.message.content : [msg.message.content]
+    return blocks.map((b: any) => {
+      if (typeof b === 'string') return b
+      if (b?.text) return b.text
+      if (b?.type === 'tool_use') return `[调用工具: ${b.name}]`
+      return null
+    }).filter(Boolean).join('')
+  }
+  if (typeof msg?.result === 'string') return msg.result
+  return null
+}
+
+function truncate(s: string, max = 200): string {
+  return s.length <= max ? s : s.slice(0, max) + '...'
 }
 
 function stopTimer(): void {

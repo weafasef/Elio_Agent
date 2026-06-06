@@ -436,7 +436,8 @@ export class StructuredIO {
         message.type !== 'user' &&
         message.type !== 'control_request' &&
         message.type !== 'assistant' &&
-        message.type !== 'system'
+        message.type !== 'system' &&
+        message.type !== 'worldview'
       ) {
         logForDebugging(`Ignoring unknown message type: ${message.type}`, {
           level: 'warn',
@@ -449,7 +450,11 @@ export class StructuredIO {
         }
         return message
       }
-      if (message.type === 'assistant' || message.type === 'system') {
+      if (
+        message.type === 'assistant' ||
+        message.type === 'system' ||
+        message.type === 'worldview'
+      ) {
         return message
       }
       if (message.message.role !== 'user') {

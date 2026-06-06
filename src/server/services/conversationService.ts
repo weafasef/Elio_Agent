@@ -433,6 +433,13 @@ export class ConversationService {
     })
   }
 
+  sendWorldview(sessionId: string, worldview: string): boolean {
+    return this.sendSdkMessage(sessionId, {
+      type: 'worldview',
+      worldview,
+    })
+  }
+
   respondToPermission(
     sessionId: string,
     requestId: string,

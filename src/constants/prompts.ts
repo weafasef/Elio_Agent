@@ -60,6 +60,7 @@ import { logForDebugging } from '../utils/debug.js'
 import { loadMemoryPrompt } from '../memdir/memdir.js'
 import { isUndercover } from '../utils/undercover.js'
 import { getTraitManager, buildPersonalityPrompt } from '../elio/index.js'
+import { getWorldview } from '../elio/worldview.js'
 import { isMcpInstructionsDeltaEnabled } from '../utils/mcpInstructionsDelta.js'
 
 // Dead code elimination: conditional imports for feature-gated modules
@@ -515,6 +516,11 @@ ${CYBER_RISK_INSTRUCTION}`,
       const tm = getTraitManager()
       if (!tm) return null
       return buildPersonalityPrompt(tm.getTraits())
+    }),
+    systemPromptSection('elio_worldview', () => {
+      const worldview = getWorldview()
+      if (!worldview) return null
+      return `# Elio 对周围世界的感知\n${worldview}\n\n根据感知自主决定要做的事，不需要等主人指令。`
     }),
     systemPromptSection('ant_model_override', () =>
       getAntModelOverrideSection(),
