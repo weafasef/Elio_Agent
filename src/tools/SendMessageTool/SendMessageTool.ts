@@ -755,21 +755,13 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
               },
             }
           }
-          /* eslint-disable @typescript-eslint/no-require-imports */
-          const { postInterClaudeMessage } =
-            require('../../bridge/peerSessions.js') as typeof import('../../bridge/peerSessions.js')
-          /* eslint-enable @typescript-eslint/no-require-imports */
-          const result = await postInterClaudeMessage(
-            addr.target,
-            input.message,
-          )
-          const preview = input.summary || truncate(input.message, 50)
+          // Bridge peerSessions removed — bridge deleted
+          // The if (!getReplBridgeHandle() || !isReplBridgeActive()) guard above
+          // always returns early with getReplBridgeHandle() → null
           return {
             data: {
-              success: result.ok,
-              message: result.ok
-                ? `“${preview}” → ${input.to}`
-                : `Failed to send to ${input.to}: ${result.error ?? 'unknown'}`,
+              success: false,
+              message: `Bridge removed — cannot send to ${input.to}`,
             },
           }
         }

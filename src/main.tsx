@@ -2988,14 +2988,8 @@ async function run(): Promise<CommanderCommand> {
     const initialIsBriefOnly = feature('KAIROS') || feature('KAIROS_BRIEF') ? getUserMsgOptIn() : false;
     const fullRemoteControl = remoteControl || getRemoteControlAtStartup() || kairosEnabled;
     let ccrMirrorEnabled = false;
-    if (feature('CCR_MIRROR') && !fullRemoteControl) {
-      /* eslint-disable @typescript-eslint/no-require-imports */
-      const {
-        isCcrMirrorEnabled
-      } = require('./bridge/bridgeEnabled.js') as typeof import('./bridge/bridgeEnabled.js');
-      /* eslint-enable @typescript-eslint/no-require-imports */
-      ccrMirrorEnabled = isCcrMirrorEnabled();
-    }
+    // CCR_MIRROR / bridge removed — bridge deleted
+    ccrMirrorEnabled = false;
     const initialState: AppState = {
       settings: getInitialSettings(),
       tasks: {},
