@@ -211,6 +211,8 @@ function onOutput(msg: any): void {
     if (content) console.log(`[Heartbeat] Elio: ${truncate(content)}`)
   } else if (msg?.type === 'stream_event') {
     // skip — partial chunks; final text logged by assistant event
+  } else if (msg?.type === 'user') {
+    // skip — worldview echo from CLI SDK, not real user messages
   } else {
     const subtype = msg?.subtype || '-'
     const c = content ? ` — ${truncate(content)}` : ''
