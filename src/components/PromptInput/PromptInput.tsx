@@ -94,7 +94,6 @@ import { findThinkingTriggerPositions, getRainbowColor, isUltrathinkEnabled } fr
 import { findTokenBudgetPositions } from '../../utils/tokenBudget.js';
 import { findUltraplanTriggerPositions, findUltrareviewTriggerPositions } from '../../utils/ultraplan/keyword.js';
 import { AutoModeOptInDialog } from '../AutoModeOptInDialog.js';
-import { BridgeDialog } from '../BridgeDialog.js';
 import { ConfigurableShortcutHint } from '../ConfigurableShortcutHint.js';
 import { getVisibleAgentTasks, useCoordinatorTaskCount } from '../CoordinatorAgentStatus.js';
 import { getEffortNotificationText } from '../EffortIndicator.js';
@@ -369,7 +368,6 @@ function PromptInput({
   // (arrow, escape, backspace, paste, space) disarms without inserting.
   const pendingSpaceAfterPillRef = useRef(false);
   const [showTeamsDialog, setShowTeamsDialog] = useState(false);
-  const [showBridgeDialog, setShowBridgeDialog] = useState(false);
   const [teammateFooterIndex, setTeammateFooterIndex] = useState(0);
   // -1 sentinel: tasks pill is selected but no specific agent row is selected yet.
   // First ↓ selects the pill, second ↓ moves to row 0. Prevents double-select
@@ -1825,7 +1823,6 @@ function PromptInput({
           selectFooterItem(null);
           break;
         case 'bridge':
-          setShowBridgeDialog(true);
           selectFooterItem(null);
           break;
       }
@@ -2158,9 +2155,6 @@ function PromptInput({
   if (thinkingToggleElement) {
     return thinkingToggleElement;
   }
-  if (showBridgeDialog) {
-    return <BridgeDialog onDone={() => {
-      setShowBridgeDialog(false);
       selectFooterItem(null);
     }} />;
   }

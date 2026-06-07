@@ -2,7 +2,6 @@ import { c as _c } from "react/compiler-runtime";
 import { feature } from 'bun:bundle';
 import * as React from 'react';
 import { resetCostState } from '../../bootstrap/state.js';
-import { clearTrustedDeviceToken, enrollTrustedDevice } from '../../bridge/trustedDevice.js';
 import type { LocalJSXCommandContext } from '../../commands.js';
 import { ConfigurableShortcutHint } from '../../components/ConfigurableShortcutHint.js';
 import { Dialog } from '../../components/design-system/Dialog.js';
@@ -34,12 +33,6 @@ export async function call(onDone: LocalJSXCommandOnDone, context: LocalJSXComma
       resetUserCache();
       // Refresh GrowthBook after login to get updated feature flags (e.g., for claude.ai MCPs)
       refreshGrowthBookAfterAuthChange();
-      // Clear any stale trusted device token from a previous account before
-      // re-enrolling — prevents sending the old token on bridge calls while
-      // the async enrollTrustedDevice() is in-flight.
-      clearTrustedDeviceToken();
-      // Enroll as a trusted device for Remote Control (10-min fresh-session window)
-      void enrollTrustedDevice();
       // Reset killswitch gate checks and re-run with new org
       resetBypassPermissionsCheck();
       const appState = context.getAppState();

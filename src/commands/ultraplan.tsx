@@ -1,5 +1,5 @@
 import { readFileSync } from 'fs';
-import { REMOTE_CONTROL_DISCONNECTED_MSG } from '../bridge/types.js';
+// REMOTE_CONTROL_DISCONNECTED_MSG removed — bridge deleted
 import type { Command } from '../commands.js';
 import { DIAMOND_OPEN } from '../constants/figures.js';
 import { getRemoteSessionUrl } from '../constants/product.js';
@@ -183,7 +183,7 @@ function startDetachedPoll(taskId: string, sessionId: string, url: string, getAp
 // Renders immediately so the terminal doesn't appear hung during the
 // multi-second teleportToRemote round-trip.
 function buildLaunchMessage(disconnectedBridge?: boolean): string {
-  const prefix = disconnectedBridge ? `${REMOTE_CONTROL_DISCONNECTED_MSG} ` : '';
+  const prefix = '';  // REMOTE_CONTROL_DISCONNECTED_MSG removed — bridge deleted
   return `${DIAMOND_OPEN} ultraplan\n${prefix}Starting Claude Code on the web…`;
 }
 function buildSessionReadyMessage(url: string): string {

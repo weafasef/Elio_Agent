@@ -1,7 +1,8 @@
 import { feature } from 'bun:bundle'
 import { z } from 'zod/v4'
 import { isReplBridgeActive } from '../../bootstrap/state.js'
-import { getReplBridgeHandle } from '../../bridge/replBridgeHandle.js'
+// getReplBridgeHandle moved from bridge/ (deleted) — always returns null
+function getReplBridgeHandle(): null { return null }
 import type { Tool, ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { findTeammateTaskByAgentId } from '../../tasks/InProcessTeammateTask/InProcessTeammateTask.js'
@@ -756,7 +757,6 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
           }
           /* eslint-disable @typescript-eslint/no-require-imports */
           const { postInterClaudeMessage } =
-            require('../../bridge/peerSessions.js') as typeof import('../../bridge/peerSessions.js')
           /* eslint-enable @typescript-eslint/no-require-imports */
           const result = await postInterClaudeMessage(
             addr.target,

@@ -3,7 +3,7 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs
 import { randomUUID } from 'crypto'
 import { logForDebugging } from 'src/utils/debug.js'
 import { getAllowedChannels } from '../../../bootstrap/state.js'
-import type { BridgePermissionCallbacks } from '../../../bridge/bridgePermissionCallbacks.js'
+// BridgePermissionCallbacks removed — bridge deleted
 import { getTerminalFocused } from '../../../ink/terminal-focus-state.js'
 import {
   CHANNEL_PERMISSION_REQUEST_METHOD,
@@ -36,7 +36,7 @@ type InteractivePermissionParams = {
   description: string
   result: PermissionDecision & { behavior: 'ask' }
   awaitAutomatedChecksBeforeDialog: boolean | undefined
-  bridgeCallbacks?: BridgePermissionCallbacks
+  bridgeCallbacks?: Record<string, unknown>
   channelCallbacks?: ChannelPermissionCallbacks
 }
 
