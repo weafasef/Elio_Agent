@@ -217,7 +217,6 @@ import { handleSpeculationAccept, type ActiveSpeculationState } from '../service
 import { IdeOnboardingDialog } from '../components/IdeOnboardingDialog.js';
 import { EffortCallout, shouldShowEffortCallout } from '../components/EffortCallout.js';
 import type { EffortValue } from '../utils/effort.js';
-import { RemoteCallout } from '../components/RemoteCallout.js';
 /* eslint-disable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
 const AntModelSwitchCallout = "external" === 'ant' ? require('../components/AntModelSwitchCallout.js').AntModelSwitchCallout : null;
 const shouldShowAntModelSwitch = "external" === 'ant' ? require('../components/AntModelSwitchCallout.js').shouldShowModelSwitchCallout : (): boolean => false;
@@ -741,7 +740,7 @@ export function REPL({
     return false;
   });
   const [showEffortCallout, setShowEffortCallout] = useState(() => shouldShowEffortCallout(mainLoopModel));
-  const showRemoteCallout = useAppState(s => s.showRemoteCallout);
+  // showRemoteCallout removed — bridge deleted
   const [showDesktopUpsellStartup, setShowDesktopUpsellStartup] = useState(() => shouldShowDesktopUpsellStartup());
   // notifications
   useModelMigrationNotifications();
@@ -2014,7 +2013,7 @@ export function REPL({
   // Permission and interactive dialogs can show even when toolJSX is set,
   // as long as shouldContinueAnimation is true. This prevents deadlocks when
   // agents set background hints while waiting for user interaction.
-  function getFocusedInputDialog(): 'message-selector' | 'sandbox-permission' | 'tool-permission' | 'prompt' | 'worker-sandbox-permission' | 'elicitation' | 'cost' | 'idle-return' | 'init-onboarding' | 'ide-onboarding' | 'model-switch' | 'undercover-callout' | 'effort-callout' | 'remote-callout' | 'lsp-recommendation' | 'plugin-hint' | 'desktop-upsell' | 'ultraplan-choice' | 'ultraplan-launch' | undefined {
+  function getFocusedInputDialog(): 'message-selector' | 'sandbox-permission' | 'tool-permission' | 'prompt' | 'worker-sandbox-permission' | 'elicitation' | 'cost' | 'idle-return' | 'init-onboarding' | 'ide-onboarding' | 'model-switch' | 'undercover-callout' | 'effort-callout' | 'lsp-recommendation' | 'plugin-hint' | 'desktop-upsell' | 'ultraplan-choice' | 'ultraplan-launch' | undefined {
     // Exit states always take precedence
     if (isExiting || exitFlow) return undefined;
 
@@ -2050,7 +2049,7 @@ export function REPL({
     if (allowDialogsWithAnimation && showEffortCallout) return 'effort-callout';
 
     // Remote callout (shown once before first bridge enable)
-    if (allowDialogsWithAnimation && showRemoteCallout) return 'remote-callout';
+    // remote-callout removed — bridge deleted
 
     // LSP plugin recommendation (lowest priority - non-blocking suggestion)
     if (allowDialogsWithAnimation && lspRecommendation) return 'lsp-recommendation';
@@ -4826,20 +4825,7 @@ export function REPL({
               }));
             }
           }} />}
-                {focusedInputDialog === 'remote-callout' && <RemoteCallout onDone={selection => {
-            setAppState(prev => {
-              if (!prev.showRemoteCallout) return prev;
-              return {
-                ...prev,
-                showRemoteCallout: false,
-                ...(selection === 'enable' && {
-                  replBridgeEnabled: true,
-                  replBridgeExplicit: true,
-                  replBridgeOutboundOnly: false
-                })
-              };
-            });
-          }} />}
+                {/* RemoteCallout removed — bridge deleted */}
 
                 {exitFlow}
 

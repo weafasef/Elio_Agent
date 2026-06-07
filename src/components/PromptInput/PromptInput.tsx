@@ -94,7 +94,7 @@ import { findThinkingTriggerPositions, getRainbowColor, isUltrathinkEnabled } fr
 import { findTokenBudgetPositions } from '../../utils/tokenBudget.js';
 import { findUltraplanTriggerPositions, findUltrareviewTriggerPositions } from '../../utils/ultraplan/keyword.js';
 import { AutoModeOptInDialog } from '../AutoModeOptInDialog.js';
-import { BridgeDialog } from '../BridgeDialog.js';
+// BridgeDialog removed — bridge deleted
 import { ConfigurableShortcutHint } from '../ConfigurableShortcutHint.js';
 import { getVisibleAgentTasks, useCoordinatorTaskCount } from '../CoordinatorAgentStatus.js';
 import { getEffortNotificationText } from '../EffortIndicator.js';
@@ -286,13 +286,8 @@ function PromptInput({
   const store = useAppStateStore();
   const setAppState = useSetAppState();
   const tasks = useAppState(s => s.tasks);
-  const replBridgeConnected = useAppState(s => s.replBridgeConnected);
-  const replBridgeExplicit = useAppState(s => s.replBridgeExplicit);
-  const replBridgeReconnecting = useAppState(s => s.replBridgeReconnecting);
-  // Must match BridgeStatusIndicator's render condition (PromptInputFooter.tsx) —
-  // the pill returns null for implicit-and-not-reconnecting, so nav must too,
-  // otherwise bridge becomes an invisible selection stop.
-  const bridgeFooterVisible = replBridgeConnected && (replBridgeExplicit || replBridgeReconnecting);
+  // bridgeFooterVisible removed — bridge deleted
+  const bridgeFooterVisible = false;
   // Tmux pill (ant-only) — visible when there's an active tungsten session
   const hasTungstenSession = useAppState(s => "external" === 'ant' && s.tungstenActiveSession !== undefined);
   const tmuxFooterVisible = "external" === 'ant' && hasTungstenSession;
@@ -369,7 +364,7 @@ function PromptInput({
   // (arrow, escape, backspace, paste, space) disarms without inserting.
   const pendingSpaceAfterPillRef = useRef(false);
   const [showTeamsDialog, setShowTeamsDialog] = useState(false);
-  const [showBridgeDialog, setShowBridgeDialog] = useState(false);
+  // showBridgeDialog removed — bridge deleted
   const [teammateFooterIndex, setTeammateFooterIndex] = useState(0);
   // -1 sentinel: tasks pill is selected but no specific agent row is selected yet.
   // First ↓ selects the pill, second ↓ moves to row 0. Prevents double-select
@@ -1824,10 +1819,7 @@ function PromptInput({
           setShowTeamsDialog(true);
           selectFooterItem(null);
           break;
-        case 'bridge':
-          setShowBridgeDialog(true);
-          selectFooterItem(null);
-          break;
+        // case 'bridge' removed — bridge deleted
       }
     },
     'footer:clearSelection': () => {
@@ -2157,12 +2149,6 @@ function PromptInput({
   }
   if (thinkingToggleElement) {
     return thinkingToggleElement;
-  }
-  if (showBridgeDialog) {
-    return <BridgeDialog onDone={() => {
-      setShowBridgeDialog(false);
-      selectFooterItem(null);
-    }} />;
   }
   const baseProps: BaseTextInputProps = {
     multiline: true,
