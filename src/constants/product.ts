@@ -63,9 +63,14 @@ export function getClaudeAiBaseUrl(
  * to keep constants/ leaf-of-DAG at module-load time).
  */
 export function getRemoteSessionUrl(
-  _sessionId: string,
-  _ingressUrl?: string,
+  sessionId: string,
+  ingressUrl?: string,
 ): string {
-  // Bridge removed — sessionIdCompat / toCompatSessionId deleted
-  return ''
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const { toCompatSessionId } =
+    require('../bridge/sessionIdCompat.js') as typeof import('../bridge/sessionIdCompat.js')
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  const compatId = toCompatSessionId(sessionId)
+  const baseUrl = getClaudeAiBaseUrl(compatId, ingressUrl)
+  return `${baseUrl}/code/${compatId}`
 }

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { clearTrustedDeviceTokenCache } from '../../bridge/trustedDevice.js';
 import { Text } from '../../ink.js';
 import { refreshGrowthBookAfterAuthChange } from '../../services/analytics/growthbook.js';
 import { getGroveNoticeConfig, getGroveSettings } from '../../services/api/grove.js';
@@ -50,7 +51,7 @@ export async function performLogout({
 export async function clearAuthRelatedCaches(): Promise<void> {
   // Clear the OAuth token cache
   getClaudeAIOAuthTokens.cache?.clear?.();
-  // clearTrustedDeviceTokenCache removed — bridge deleted
+  clearTrustedDeviceTokenCache();
   clearBetasCaches();
   clearToolSchemaCache();
 

@@ -2,6 +2,7 @@ import type { StdoutMessage } from 'src/entrypoints/sdk/controlTypes.js'
 import { PassThrough } from 'stream'
 import { URL } from 'url'
 import { getSessionId } from '../bootstrap/state.js'
+import { getPollIntervalConfig } from '../bridge/pollConfig.js'
 import { registerCleanup } from '../utils/cleanupRegistry.js'
 import { setCommandLifecycleListener } from '../utils/commandLifecycle.js'
 import { isDebugMode, logForDebugging } from '../utils/debug.js'
@@ -170,7 +171,29 @@ export class RemoteIO extends StructuredIO {
     // setOnEvent inside new CCRClient() when CCR v2 is enabled).
     void this.transport.connect()
 
-    // Bridge keep-alive removed — bridge deleted
+    // Push a silent keep_alive frame on a fixed interval so upstream
+    // proxies and the session-ingress layer don't GC an otherwise-idle
+    // remote control session. The keep_alive type is filtered before
+    // reaching any client UI (Query.ts drops it; structuredIO.ts drops it;
+    // web/iOS/Android never see it in their message loop). Interval comes
+    // from GrowthBook (tengu_bridge_poll_interval_config
+    // session_keepalive_interval_v2_ms, default 120s); 0 = disabled.
+    // Bridge-only: fixes Envoy idle timeout on bridge-topology sessions
+    // (#21931). byoc workers ran without this before #21931 and do not
+    // need it — different network path.
+    const keepAliveIntervalMs =
+      getPollIntervalConfig().session_keepalive_interval_v2_ms
+    if (this.isBridge && keepAliveIntervalMs > 0) {
+      this.keepAliveTimer = setInterval(() => {
+        logForDebugging('[remote-io] keep_alive sent')
+        void this.write({ type: 'keep_alive' }).catch(err => {
+          logForDebugging(
+            `[remote-io] keep_alive write failed: ${errorMessage(err)}`,
+          )
+        })
+      }, keepAliveIntervalMs)
+      this.keepAliveTimer.unref?.()
+    }
 
     // Register for graceful shutdown cleanup
     registerCleanup(async () => this.close())

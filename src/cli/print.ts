@@ -136,7 +136,11 @@ import { getCwd } from 'src/utils/cwd.js'
 import omit from 'lodash-es/omit.js'
 import reject from 'lodash-es/reject.js'
 import { isPolicyAllowed } from 'src/services/policyLimits/index.js'
+import type { ReplBridgeHandle } from 'src/bridge/replBridge.js'
 import { getRemoteSessionUrl } from 'src/constants/product.js'
+import { buildBridgeConnectUrl } from 'src/bridge/bridgeStatusUtil.js'
+import { extractInboundMessageFields } from 'src/bridge/inboundMessages.js'
+import { resolveAndPrepend } from 'src/bridge/inboundAttachments.js'
 import type { CanUseToolFn } from 'src/hooks/useCanUseTool.js'
 import { hasPermissionsToUseTool } from 'src/utils/permissions/permissions.js'
 import { safeParseJSON } from 'src/utils/json.js'
@@ -1514,8 +1518,11 @@ function runHeadlessStreaming(
 
   // Bridge handle for remote-control (SDK control message).
   // Mirrors the REPL's useReplBridge hook: the handle is created when
+  // `remote_control` is enabled and torn down when disabled.
+  let bridgeHandle: ReplBridgeHandle | null = null
   // Cursor into mutableMessages — tracks how far we've forwarded.
   // Same index-based diff as useReplBridge's lastWrittenIndexRef.
+  let bridgeLastForwardedIndex = 0
 
   // Forward new messages from mutableMessages to the bridge.
   // Called incrementally during each turn (so claude.ai sees progress
@@ -1524,6 +1531,22 @@ function runHeadlessStreaming(
   // writeMessages has its own UUID-based dedup (initialMessageUUIDs,
   // recentPostedUUIDs) — the index cursor here is a pre-filter to avoid
   // O(n) re-scanning of already-sent messages on every call.
+  function forwardMessagesToBridge(): void {
+    if (!bridgeHandle) return
+    // Guard against mutableMessages shrinking (compaction truncates it).
+    const startIndex = Math.min(
+      bridgeLastForwardedIndex,
+      mutableMessages.length,
+    )
+    const newMessages = mutableMessages
+      .slice(startIndex)
+      .filter(m => m.type === 'user' || m.type === 'assistant')
+    bridgeLastForwardedIndex = mutableMessages.length
+    if (newMessages.length > 0) {
+      bridgeHandle.writeMessages(newMessages)
+    }
+  }
+
   // Helper to apply MCP server changes - used by both mcp_set_servers control message
   // and background plugin installation.
   // NOTE: Nested function required - mutates closure state (sdkMcpConfigs, sdkClients, etc.)
@@ -2209,6 +2232,22 @@ function runHeadlessStreaming(
               // Forward messages to bridge incrementally (mid-turn) so
               // claude.ai sees progress and the connection stays alive
               // while blocked on permission requests.
+              forwardMessagesToBridge()
+
+              if (message.type === 'result') {
+                // Flush pending SDK events so they appear before result on the stream.
+                for (const event of drainSdkEvents()) {
+                  output.enqueue(event)
+                }
+
+                // Hold-back: don't emit result while background agents are running
+                const currentState = getAppState()
+                if (
+                  getRunningTasks(currentState).some(
+                    t =>
+                      (t.type === 'local_agent' ||
+                        t.type === 'local_workflow') &&
+                      isBackgroundTask(t),
                   )
                 ) {
                   heldBackResult = message
@@ -2233,6 +2272,22 @@ function runHeadlessStreaming(
           }
 
           // Forward messages to bridge after each turn
+          forwardMessagesToBridge()
+          bridgeHandle?.sendResult()
+
+          if (feature('FILE_PERSISTENCE') && turnStartTime !== undefined) {
+            void executeFilePersistence(
+              turnStartTime,
+              abortController.signal,
+              result => {
+                output.enqueue({
+                  type: 'system' as const,
+                  subtype: 'files_persisted' as const,
+                  files: result.files,
+                  failed: result.failed,
+                  processed_at: new Date().toISOString(),
+                  uuid: randomUUID(),
+                  session_id: getSessionId(),
                 })
               },
             )
@@ -3861,8 +3916,134 @@ function runHeadlessStreaming(
           }
           sendControlResponseSuccess(message)
         } else if (message.request.subtype === 'remote_control') {
-          // Bridge removed — remote control not supported
-          sendControlResponseError(message, 'Remote control removed — server-only mode')
+          if (message.request.enabled) {
+            if (bridgeHandle) {
+              // Already connected
+              sendControlResponseSuccess(message, {
+                session_url: getRemoteSessionUrl(
+                  bridgeHandle.bridgeSessionId,
+                  bridgeHandle.sessionIngressUrl,
+                ),
+                connect_url: buildBridgeConnectUrl(
+                  bridgeHandle.environmentId,
+                  bridgeHandle.sessionIngressUrl,
+                ),
+                environment_id: bridgeHandle.environmentId,
+              })
+            } else {
+              // initReplBridge surfaces gate-failure reasons via
+              // onStateChange('failed', detail) before returning null.
+              // Capture so the control-response error is actionable
+              // ("/login", "disabled by your organization's policy", etc.)
+              // instead of a generic "initialization failed".
+              let bridgeFailureDetail: string | undefined
+              try {
+                const { initReplBridge } = await import(
+                  'src/bridge/initReplBridge.js'
+                )
+                const handle = await initReplBridge({
+                  onInboundMessage(msg) {
+                    const fields = extractInboundMessageFields(msg)
+                    if (!fields) return
+                    const { content, uuid } = fields
+                    enqueue({
+                      value: content,
+                      mode: 'prompt' as const,
+                      uuid,
+                      skipSlashCommands: true,
+                    })
+                    void run()
+                  },
+                  onPermissionResponse(response) {
+                    // Forward bridge permission responses into the
+                    // stdin processing loop so they resolve pending
+                    // permission requests from the SDK consumer.
+                    structuredIO.injectControlResponse(response)
+                  },
+                  onInterrupt() {
+                    abortController?.abort()
+                  },
+                  onSetModel(model) {
+                    const resolved =
+                      model === 'default' ? getDefaultMainLoopModel() : model
+                    activeUserSpecifiedModel = resolved
+                    setMainLoopModelOverride(resolved)
+                  },
+                  onSetMaxThinkingTokens(maxTokens) {
+                    if (maxTokens === null) {
+                      options.thinkingConfig = undefined
+                    } else if (maxTokens === 0) {
+                      options.thinkingConfig = { type: 'disabled' }
+                    } else {
+                      options.thinkingConfig = {
+                        type: 'enabled',
+                        budgetTokens: maxTokens,
+                      }
+                    }
+                  },
+                  onStateChange(state, detail) {
+                    if (state === 'failed') {
+                      bridgeFailureDetail = detail
+                    }
+                    logForDebugging(
+                      `[bridge:sdk] State change: ${state}${detail ? ` — ${detail}` : ''}`,
+                    )
+                    output.enqueue({
+                      type: 'system' as StdoutMessage['type'],
+                      subtype: 'bridge_state' as string,
+                      state,
+                      detail,
+                      uuid: randomUUID(),
+                      session_id: getSessionId(),
+                    } as StdoutMessage)
+                  },
+                  initialMessages:
+                    mutableMessages.length > 0 ? mutableMessages : undefined,
+                })
+                if (!handle) {
+                  sendControlResponseError(
+                    message,
+                    bridgeFailureDetail ??
+                      'Remote Control initialization failed',
+                  )
+                } else {
+                  bridgeHandle = handle
+                  bridgeLastForwardedIndex = mutableMessages.length
+                  // Forward permission requests to the bridge
+                  structuredIO.setOnControlRequestSent(request => {
+                    handle.sendControlRequest(request)
+                  })
+                  // Cancel stale bridge permission prompts when the SDK
+                  // consumer resolves a can_use_tool request first.
+                  structuredIO.setOnControlRequestResolved(requestId => {
+                    handle.sendControlCancelRequest(requestId)
+                  })
+                  sendControlResponseSuccess(message, {
+                    session_url: getRemoteSessionUrl(
+                      handle.bridgeSessionId,
+                      handle.sessionIngressUrl,
+                    ),
+                    connect_url: buildBridgeConnectUrl(
+                      handle.environmentId,
+                      handle.sessionIngressUrl,
+                    ),
+                    environment_id: handle.environmentId,
+                  })
+                }
+              } catch (err) {
+                sendControlResponseError(message, errorMessage(err))
+              }
+            }
+          } else {
+            // Disable
+            if (bridgeHandle) {
+              structuredIO.setOnControlRequestSent(undefined)
+              structuredIO.setOnControlRequestResolved(undefined)
+              await bridgeHandle.teardown()
+              bridgeHandle = null
+            }
+            sendControlResponseSuccess(message)
+          }
         } else {
           // Unknown control request subtype — send an error response so
           // the caller doesn't hang waiting for a reply that never comes.
@@ -3971,7 +4152,7 @@ function runHeadlessStreaming(
         // User: normal message content
         value: message.type === 'worldview'
           ? ''
-          : message.message.content,
+          : await resolveAndPrepend(message, message.message.content),
         uuid: message.uuid,
         priority: message.priority,
       })

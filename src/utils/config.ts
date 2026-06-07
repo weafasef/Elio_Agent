@@ -36,7 +36,9 @@ import type { ThemeSetting } from './theme.js'
 const teamMemPaths = feature('TEAMMEM')
   ? (require('../memdir/teamMemPaths.js') as typeof import('../memdir/teamMemPaths.js'))
   : null
-// ccrAutoConnect removed — bridge deleted
+const ccrAutoConnect = feature('CCR_AUTO_CONNECT')
+  ? (require('../bridge/bridgeEnabled.js') as typeof import('../bridge/bridgeEnabled.js'))
+  : null
 
 /* eslint-enable @typescript-eslint/no-require-imports */
 import type { ImageDimensions } from './imageResizer.js'
@@ -1093,7 +1095,7 @@ export function getRemoteControlAtStartup(): boolean {
   const explicit = getGlobalConfig().remoteControlAtStartup
   if (explicit !== undefined) return explicit
   if (feature('CCR_AUTO_CONNECT')) {
-    // ccrAutoConnect removed — bridge deleted
+    if (ccrAutoConnect?.getCcrAutoConnectDefault()) return true
   }
   return false
 }
