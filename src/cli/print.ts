@@ -354,7 +354,6 @@ import { drainSdkEvents } from '../utils/sdkEventQueue.js'
 import { initializeGrowthBook } from '../services/analytics/growthbook.js'
 import { errorMessage, toError } from '../utils/errors.js'
 import { sleep } from '../utils/sleep.js'
-import { isExtractModeActive } from '../memdir/paths.js'
 
 // Dead code elimination: conditional imports
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -373,9 +372,6 @@ const cronJitterConfigModule = feature('AGENT_TRIGGERS')
   : null
 const cronGate = feature('AGENT_TRIGGERS')
   ? (require('../tools/ScheduleCronTool/prompt.js') as typeof import('../tools/ScheduleCronTool/prompt.js'))
-  : null
-const extractMemoriesModule = feature('EXTRACT_MEMORIES')
-  ? (require('../services/extractMemories/extractMemories.js') as typeof import('../services/extractMemories/extractMemories.js'))
   : null
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -988,15 +984,6 @@ export async function runHeadless(
 
   // Log headless latency metrics for the final turn
   logHeadlessProfilerTurn()
-
-  // Drain any in-flight memory extraction before shutdown. The response is
-  // already flushed above, so this adds no user-visible latency — it just
-  // delays process exit so gracefulShutdownSync's 5s failsafe doesn't kill
-  // the forked agent mid-flight. Gated by isExtractModeActive so the
-  // tengu_slate_thimble flag controls non-interactive extraction end-to-end.
-  if (feature('EXTRACT_MEMORIES') && isExtractModeActive()) {
-    await extractMemoriesModule!.drainPendingExtraction()
-  }
 
   gracefulShutdownSync(
     lastMessage?.type === 'result' && lastMessage?.is_error ? 1 : 0,

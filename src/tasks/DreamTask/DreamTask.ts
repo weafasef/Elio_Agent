@@ -3,7 +3,7 @@
 // Shift+Down dialog. The dream agent itself is unchanged — this is pure UI
 // surfacing via the existing task registry.
 
-import { rollbackConsolidationLock } from '../../services/autoDream/consolidationLock.js'
+// rollbackConsolidationLock removed — autoDream module deleted (replaced by graph memory system)
 import type { SetAppState, Task, TaskStateBase } from '../../Task.js'
 import { createTaskStateBase, generateTaskId } from '../../Task.js'
 import { registerTask, updateTaskState } from '../../utils/task/framework.js'
@@ -134,11 +134,9 @@ export const DreamTask: Task = {
   type: 'dream',
 
   async kill(taskId, setAppState) {
-    let priorMtime: number | undefined
     updateTaskState<DreamTaskState>(taskId, setAppState, task => {
       if (task.status !== 'running') return task
       task.abortController?.abort()
-      priorMtime = task.priorMtime
       return {
         ...task,
         status: 'killed',
@@ -147,11 +145,6 @@ export const DreamTask: Task = {
         abortController: undefined,
       }
     })
-    // Rewind the lock mtime so the next session can retry. Same path as the
-    // fork-failure catch in autoDream.ts. If updateTaskState was a no-op
-    // (already terminal), priorMtime stays undefined and we skip.
-    if (priorMtime !== undefined) {
-      await rollbackConsolidationLock(priorMtime)
-    }
+    // rollbackConsolidationLock removed — autoDream module deleted
   },
 }

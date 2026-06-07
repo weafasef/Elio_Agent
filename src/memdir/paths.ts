@@ -277,3 +277,15 @@ export function isAutoMemPath(absolutePath: string): boolean {
   const normalizedPath = normalize(absolutePath)
   return normalizedPath.startsWith(getAutoMemPath())
 }
+
+// ── Stubs for deleted autoDream service ────────────────────────────────
+
+/** @deprecated autoDream removed — replaced by dual-agent graph memory system. Always returns false. */
+export function isAutoDreamEnabled(): boolean {
+  return false
+}
+
+/** @deprecated autoDream removed — replaced by dual-agent graph memory system. Always returns null. */
+export function readLastConsolidatedAt(): null {
+  return null
+}

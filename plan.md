@@ -932,7 +932,7 @@ LLM 流式输出:
 - ✅ 实现 `Traversal.ts`：沿四种边类型正向+反向 BFS，2 跳邻域
 - ✅ 实现 `Synthesizer.ts`：遍历子图 → 按时间排序 → 自然语言叙事
 - ✅ 实现 `ContextBridge.ts`：模块级 sharedContext，MemoryAgent 写，Elio 零成本读
-- ✅ 接入表 Agent 系统提示词动态段（`prompts.ts` 中替换 `loadMemoryPrompt()`）
+- ✅ 接入表 Agent 系统提示词动态段（`loadMemoryPrompt()` 存根化返回 null，旧 guide 已删除）
 
 ### ✅ 第 3 步：Slow Path（已完成）
 - ✅ 实现 `SlowPath.ts`：后台 30s 定时器 + 事件队列 + 重试机制
@@ -945,13 +945,7 @@ LLM 流式输出:
   - `logForDebugging()` — 结构化 JSONL 调试日志
   - LLM Cache — prompt 直作 Map key，上限 500 条
 
-### 第 4 步：旧系统清理
-- 删除 `src/memdir/` 下旧记忆文件（memdir.ts, memoryTypes.ts, memoryScan.ts, memoryAge.ts 等）
-- 删除 `src/services/extractMemories/`
-- 删除 `src/services/autoDream/`
-- 删除 `src/elio/autoAdjust.ts`（人格调整改为 Slow Path 产出的记忆信号驱动）
-- 精简表 Agent 提示词中的记忆操作指南（从 2000+ 字降到一行）
-- 清理 `~/.elio/memory/` 下的旧 .md 文件
+### 第 4 步：旧系统清理 ⚠️ 已回退，见下方 §5 重构计划
 
 ### 第 5 步：向量检索增强（后续）
 - 为事件节点添加 embedding 字段
@@ -1116,3 +1110,369 @@ Elio 时钟:
 - **会话恢复机制**：CLI 子进程崩溃后自动重启并恢复上下文
 - **记忆目录备份**：定期备份 `~/.elio/memory/` 下的图文件
 - **里 Agent 健康检查**：Slow Path 队列积压告警、DeepSeek 调用失败重试
+
+---
+
+# 五、重构计划：纯 Server + 主循环 + 渐进裁剪
+
+> **唯一运行形态：** Server 模式 (`bun src/server/index.ts --port 3456`)
+> **唯一运行逻辑：** 轮询驱动主循环，以 T_1 为周期，收集窗口内所有感知信息 → 一次 LLM → Elio 自主决策
+
+## 5.1 目标架构
+
+```
+═══════════════════════════════════════════════════════════
+              Elio 主循环 (周期 T_1，建议 3~10s)
+═══════════════════════════════════════════════════════════
+
+  窗口内累积的外部输入                上次循环的 Elio 输出
+  ┌──────────────────┐              ┌──────────────────────┐
+  │ 用户消息 ×N       │              │ "正在处理中..."       │
+  │ 他人消息 ×N       │              │ 或                    │
+  │ 视觉输入（未来）   │              │ "上次回复了xxx"       │
+  └──────┬───────────┘              │ 或                    │
+         │                          │ null (刚启动)         │
+         │                          └──────┬───────────────┘
+         │                                 │
+         └──────────┬──────────────────────┘
+                    │
+                    ▼
+            ┌──────────────┐
+            │  组装上下文    │ ←── 记忆系统注入 (ContextBridge)
+            │  + worldview  │ ←── 时间/运行时长/系统状态
+            └──────┬───────┘
+                   │
+                   ▼
+            ┌──────────────┐
+            │  一次 LLM 调用 │ → Elio 自己决定：
+            │              │    · 继续干上一件事
+            │              │    · 先回复某人
+            │              │    · 自己写日记/整理记忆
+            │              │    · 安静待着
+            └──────┬───────┘
+                   │
+                   ▼
+            存为"上次输出" → 下一轮循环读取
+```
+
+**记忆系统保持独立时钟：**
+```
+FastPath:  事件驱动，输入到立刻处理，<1ms
+SlowPath:  每 30s 独立 tick，不等任何人
+
+唯一交汇:  ContextBridge (记忆写 → Elio 读)
+```
+
+## 5.2 裁剪清单
+
+### 不需要的东西
+
+| 模块 | 说明 | 理由 |
+|------|------|------|
+| 独立 CLI TUI | `cli.tsx` 一问一答模式 + Ink 渲染 | 只需要 server 路径 |
+| Desktop 桌面端 | `desktop/`, `src/bridge/` | 不是桌面应用 |
+| 旧 Markdown 记忆 | `src/memdir/` (9 文件) | 已替换为图记忆系统 |
+| extractMemories | `src/services/extractMemories/` | 旧记忆提取后台任务 |
+| autoDream | `src/services/autoDream/` | 旧记忆整合后台任务 |
+| autoAdjust | `src/elio/autoAdjust.ts` | 旧人格调整机制 |
+| 团队记忆 | `src/services/teamMemorySync/` | 单用户场景不需要 |
+| DreamTask UI | `src/tasks/DreamTask/` + `DreamDetailDialog.tsx` | 旧 dream UI |
+
+## 5.3 执行步骤
+
+### 第 1 轮：旧系统清理（回退重做）
+
+**目标：** 删除/存根化所有旧记忆系统代码，不引入 bug。
+
+#### 删除目录/文件（物理删除）
+
+| 操作 | 目标 |
+|------|------|
+| 删 | `src/services/extractMemories/` (2 文件) |
+| 删 | `src/services/autoDream/` (4 文件) |
+| 删 | `src/elio/autoAdjust.ts` |
+| 删 | `src/memdir/teamMemPrompts.ts` |
+
+#### memdir 存根化（保留文件签名，返回空/null/false）
+
+| 文件 | 当前行数 | 存根策略 |
+|------|---------|---------|
+| `memdir.ts` | ~507 | 所有函数存根，`loadMemoryPrompt()` → `null` |
+| `memoryTypes.ts` | ~200 | 常量数组空化，`parseMemoryType()` → `undefined` |
+| `memoryAge.ts` | 小 | 全部返回 `''` 或 `0` |
+| `findRelevantMemories.ts` | 小 | 返回 `[]` |
+| `memoryScan.ts` | 小 | 返回 `[]` |
+| `teamMemPaths.ts` | 小 | `isTeamMemoryEnabled()` → `false` |
+| `memoryShapeTelemetry.ts` | 小 | 不动（本来就是生成存根） |
+| `paths.ts` | ~280 | 不动（`isAutoMemoryEnabled` 等仍被广泛引用） |
+
+#### 引用修复策略
+
+每个引用点单独处理，三步走：
+1. 删 import 行
+2. 等效替换调用（null/空值/空操作）
+3. `bun build` 验证通过后才能改下一个
+
+引用点全量（~15 个文件）：
+`backgroundHousekeeping.ts`, `stopHooks.ts`, `print.ts`, `settings/types.ts`,
+`supportedSettings.ts`, `tasks.ts`, `DreamTask.ts`, `MemoryFileSelector.tsx`,
+`QueryEngine.ts` 等
+
+**验证标准：** `bun build` 通过 + `bun src/server/index.ts --port 3456` 启动正常
+
+---
+
+### 第 2 轮：裁剪非必需入口与模块
+
+**目标：** 删除不属于 Server 模式的一切。
+
+| 操作 | 目标 | 说明 |
+|------|------|------|
+| 删 | `desktop/` 目录 | 桌面端构建产物和配置 |
+| 删 | `src/bridge/` | VSCode/桌面端 IPC 桥 |
+| 删 | `src/services/teamMemorySync/` | 团队记忆同步 |
+| 删 | `src/utils/teamMemoryOps.ts` | 团队记忆操作 |
+| 删 | `src/tasks/DreamTask/` | 等 memdir 存根化后安全删除 |
+| 改 | `cli.tsx` | 删除 TUI 分支，只保留 `--session-id` 等 server 参数路径 |
+
+**验证标准：** Server 启动正常，无 broken import
+
+---
+
+### 第 3 轮：主循环重构（核心）
+
+**目标：** heartbeatService 升级为 MainLoop，实现碎片化轮询。
+
+#### 3.1 新建 `src/elio/InputBuffer.ts`
+
+```typescript
+// 累积外部输入的消息队列
+class InputBuffer {
+  private buffer: Message[] = []
+
+  push(msg: Message): void    // 外部输入到达时写入
+  drain(): Message[]          // 取出并清空本周期所有消息
+  get length(): number        // 当前积压数量
+}
+```
+
+写入点：
+- 用户 HTTP/WS 消息到达 → `InputBuffer.push()`
+- 世界观 pulse → 不再单独发送，改为每轮读取时动态生成
+- 未来：视觉输入 → `InputBuffer.push()`
+
+#### 3.2 重构 heartbeatService → MainLoop
+
+```
+旧 heartbeatService:
+  setInterval 10s → 空闲? → 推送世界观 → wait 120s → Elio 回复
+
+新 MainLoop:
+  setInterval T_1s:
+    ① messages = InputBuffer.drain()
+    ② lastOutput = getLastOutput()           // Elio 上轮输出
+    ③ memoryCtx = ContextBridge.get()         // 里 Agent 合成
+    ④ worldview = buildWorldview()            // 时间/运行时长
+    ⑤ 组装完整 system prompt
+    ⑥ 一次 LLM query（自主决策）
+    ⑦ 存 lastOutput → 下一轮循环读取
+    ⑧ 记忆系统 hook（FastPath 在消息 push 时已触发）
+```
+
+#### 3.3 Elio 输出捕获
+
+每次 LLM 响应结束后：文字内容存为 `lastOutput`。下轮循环 Elio 读到它就知道自己"刚才在做什么"。
+
+#### 3.4 记忆系统 — 零改动
+
+FastPath 在消息推入 InputBuffer 时同步触发，SlowPath 30s 定时器照常运行。
+
+---
+
+### 第 4 轮：碎片化运作（后续）
+
+参见 §4.4 表 Agent 碎片化运作：
+- Prompt 层面：每次只调 1-2 个工具，调完先汇报
+- 代码层面：工具结果间插旁白 mini LLM call
+- 并行降级：有插话需求时降低并发度
+
+---
+
+## 5.4 文件改动预估
+
+| 轮次 | 新增 | 删除 | 修改 |
+|------|------|------|------|
+| 第 1 轮：旧系统清理 | 0 | ~8 文件 | ~15 文件 |
+| 第 2 轮：裁剪入口 | 0 | ~10+ 文件 | ~3 文件 |
+| 第 3 轮：主循环重构 | `InputBuffer.ts`, `MainLoop.ts` | 0 | `server/index.ts` 等 |
+| 第 4 轮：碎片化 | 0 | 0 | prompt + 工具调度 |
+| **合计** | **~2** | **~18+** | **~20** |
+
+## 5.5 执行原则
+
+1. **逐轮推进** — 一轮完成并推送后再开始下一轮
+2. **每轮结束验证** — `bun build` + Server 启动 + 无回归
+3. **独立 commit** — 每轮一个 commit，方便回退
+4. **先删后建** — 先清干净旧代码，再建新架构
+5. **`paths.ts` 不动** — 它是新旧系统的桥，`isAutoMemoryEnabled()` 等仍被广泛引用
+
+---
+
+# 附录
+
+## 附录 A：已截切的旧记忆操作指南
+
+> 以下是从旧 `memdir/memdir.ts` + `memdir/memoryTypes.ts` 中截切的提示词全文。
+> 新系统已替换为 ContextBridge 单向注入：
+>
+> ```
+> # 记忆
+> 你的内置记忆系统自动运行。表里双Agent协作：里Agent 在后台自动感知、结构化存储、推理关系，表Agent 只读取合成结果。你不需要手动操作记忆文件。
+> ```
+
+### 旧 auto memory 提示词（buildMemoryLines 输出，约 2000+ 字）
+
+```
+# auto memory
+
+You have a persistent, file-based memory system at `<memoryDir>`.
+
+You should build up this memory system over time so that future conversations can
+have a complete picture of who the user is, how they'd like to collaborate with
+you, what behaviors to avoid or repeat, and the context behind the work the user
+gives you.
+
+If the user explicitly asks you to remember something, save it immediately as
+whichever type fits best. If they ask you to forget something, find and remove
+the relevant entry.
+
+## Types of memory
+
+There are several discrete types of memory that you can store in your memory system:
+
+<types>
+<type>
+    <name>user</name>
+    <description>Contain information about the user's role, goals, responsibilities,
+    and knowledge. Great user memories help you tailor your future behavior to the
+    user's preferences and perspective. ...</description>
+    <when_to_save>When you learn any details about the user's role, preferences,
+    responsibilities, or knowledge</when_to_save>
+    <how_to_use>When your work should be informed by the user's profile or
+    perspective. ...</how_to_use>
+    <examples>
+    user: I'm a data scientist investigating what logging we have in place
+    assistant: [saves user memory: user is a data scientist, currently focused
+    on observability/logging]
+    </examples>
+</type>
+<type>
+    <name>feedback</name>
+    <description>Guidance the user has given you about how to approach work — both
+    what to avoid and what to keep doing. ... Record from failure AND success:
+    if you only save corrections, you will avoid past mistakes but drift away
+    from approaches the user has already validated, and may grow overly cautious.
+    </description>
+    <when_to_save>Any time the user corrects your approach ("no not that", "don't",
+    "stop doing X") OR confirms a non-obvious approach worked ("yes exactly",
+    "perfect, keep doing that"). ... Include *why* so you can judge edge cases
+    later.</when_to_save>
+    <how_to_use>Let these memories guide your behavior so that the user does not
+    need to offer the same guidance twice.</how_to_use>
+    <body_structure>Lead with the rule itself, then a **Why:** line and a
+    **How to apply:** line.</body_structure>
+</type>
+<type>
+    <name>project</name>
+    <description>Information that you learn about ongoing work, goals, initiatives,
+    bugs, or incidents within the project that is not otherwise derivable from the
+    code or git history.</description>
+    <when_to_save>When you learn who is doing what, why, or by when. Always convert
+    relative dates to absolute dates (e.g., "Thursday" → "2026-03-05").</when_to_save>
+</type>
+<type>
+    <name>reference</name>
+    <description>Stores pointers to where information can be found in external
+    systems (Linear, Slack, Grafana, etc.).</description>
+</type>
+<type>
+    <name>relationship</name>
+    <scope>always private</scope>
+    <description>Information about the relationship between you and the user —
+    milestones, trust thresholds, interaction patterns.</description>
+    <when_to_save>When the user shares something personal or vulnerable, expresses
+    how they feel about interacting with you, crosses a new threshold of trust.</when_to_save>
+</type>
+<type>
+    <name>emotional</name>
+    <scope>always private</scope>
+    <description>Emotionally significant moments — times when you perceived a
+    distinct emotional tone in the interaction.</description>
+    <when_to_save>When the user expresses or implies a strong emotion (joy, sadness,
+    frustration, excitement, anxiety, relief).</when_to_save>
+</type>
+</types>
+
+## What NOT to save
+
+- Code patterns, architecture, or implementation details — these are derivable
+  from the current project state (grep, git history, CLAUDE.md)
+- Git history or branch information
+- Temporary debugging state or intermediate results
+- Information that is only relevant to the current conversation
+
+## How to save memories
+
+Saving a memory is a two-step process:
+
+**Step 1** — write the memory to its own file (e.g., `user_role.md`,
+`feedback_testing.md`) using this frontmatter format:
+
+---
+name: <short-kebab-case-slug>
+description: <one-line summary — used to decide relevance during recall>
+metadata:
+  type: user | feedback | project | reference
+---
+
+<the fact; for feedback/project, follow with **Why:** and **How to apply:** lines>
+
+**Step 2** — add a pointer to that file in `MEMORY.md`. `MEMORY.md` is an index,
+not a memory — each entry should be one line, under ~150 characters:
+`- [Title](file.md) — one-line hook`. Never write memory content directly into
+`MEMORY.md`.
+
+- Keep the name, description, and type fields in memory files up-to-date
+- Organize memory semantically by topic, not chronologically
+- Update or remove memories that turn out to be wrong or outdated
+- Do not write duplicate memories. First check if there is an existing memory
+  you can update before writing a new one.
+
+## Memory and other forms of persistence
+
+Memory is one of several persistence mechanisms available to you. The distinction
+is often that memory can be recalled in future conversations and should not be
+used for persisting information that is only useful within the scope of the
+current conversation.
+
+- When to use or update a plan instead of memory: If you are about to start a
+  non-trivial implementation task and would like to reach alignment with the user.
+- When to use or update tasks instead of memory: When you need to break your work
+  into discrete steps or keep track of your progress.
+```
+
+### 旧提示词的六种类型完整定义
+
+参见 `src/memdir/memoryTypes.ts`（已存根化）。包含 `TYPES_SECTION_COMBINED`,
+`TYPES_SECTION_INDIVIDUAL`, `WHAT_NOT_TO_SAVE_SECTION`, `WHEN_TO_ACCESS_SECTION`,
+`TRUSTING_RECALL_SECTION`, `MEMORY_DRIFT_CAVEAT`, `MEMORY_FRONTMATTER_EXAMPLE`
+共七个常量数组。完整代码在 git 历史 `HEAD~1:src/memdir/memoryTypes.ts` 中可查。
+
+### 新方案
+
+表 Agent 不再注入任何 memory 操作指南。`loadMemoryPrompt()` 已存根化为 `return null`。
+记忆系统改为：
+
+1. **里 Agent 写**：Fast Path 合成叙事 → ContextBridge.set(sharedContext)
+2. **表 Agent 读**：系统提示词动态段读取 ContextBridge.get()
+3. **零 token 负担**：表 Agent 不需要知道记忆系统的类型、文件格式、保存步骤

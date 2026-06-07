@@ -981,12 +981,6 @@ export const SettingsSchema = lazySchema(() =>
         .describe(
           'Custom directory path for auto-memory storage. Supports ~/ prefix for home directory expansion. Ignored if set in projectSettings (checked-in .claude/settings.json) for security. When unset, defaults to ~/.claude/projects/<sanitized-cwd>/memory/.',
         ),
-      autoDreamEnabled: z
-        .boolean()
-        .optional()
-        .describe(
-          'Enable background memory consolidation (auto-dream). When set, overrides the server-side default.',
-        ),
       showThinkingSummaries: z
         .boolean()
         .optional()
