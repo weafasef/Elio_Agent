@@ -12,11 +12,7 @@ import {
 import { join } from 'node:path'
 import { logForDebugging } from '../../utils/debug.js'
 
-const DEFAULT_MEMORY_DIR = join(
-  process.env.HOME ?? process.env.USERPROFILE ?? '.',
-  '.elio',
-  'memory',
-)
+const DEFAULT_MEMORY_DIR = join(process.cwd(), '.elio', 'memory')
 
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions'
 
@@ -96,6 +92,7 @@ export class MemoryAgent {
       callLLM,
       intervalMs: 30_000,
       batchSize: 1,
+      maxRetries: 3,
       edgeThreshold: 0.7,
       index: this.index,
       diskDir: this.diskDir,

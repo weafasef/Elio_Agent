@@ -80,6 +80,9 @@ runtime/__pycache__
 # Elio audit logs
 logs/
 
+# Elio memory system data
+.elio/
+
 # Local AI assistant artifacts (graph, notes)
 CLAUDE.md
 graphify-out/
