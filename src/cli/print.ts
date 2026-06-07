@@ -51,6 +51,7 @@ import {
 } from 'src/utils/messageQueueManager.js'
 import { notifyCommandLifecycle } from 'src/utils/commandLifecycle.js'
 import { setWorldview, setLastUserMessage } from '../elio/worldview.js'
+import { getMemoryAgent } from '../elio/memory/MemoryAgent.js'
 import {
   getSessionState,
   notifySessionStateChanged,
@@ -414,6 +415,33 @@ function trackReceivedMessageUuid(uuid: UUID): boolean {
     }
   }
   return true // new UUID
+}
+
+/** Extract text content from an SDK result/assistant message for memory capture. */
+function captureElioResult(message: any): void {
+  try {
+    let text = ''
+    if (message?.message?.content) {
+      const blocks = Array.isArray(message.message.content)
+        ? message.message.content
+        : [message.message.content]
+      text = blocks
+        .map((b: any) => {
+          if (typeof b === 'string') return b
+          if (b?.text) return b.text
+          return ''
+        })
+        .filter(Boolean)
+        .join(' ')
+    } else if (typeof message?.result === 'string') {
+      text = message.result
+    }
+    if (text && !message?.is_error) {
+      getMemoryAgent()?.captureElioResponse(text)
+    }
+  } catch {
+    // Memory capture is best-effort; never block the result path
+  }
 }
 
 type PromptValue = string | ContentBlockParam[]
@@ -2239,6 +2267,7 @@ function runHeadlessStreaming(
                 } else {
                   heldBackResult = null
                   output.enqueue(message)
+                  captureElioResult(message)
                 }
               } else {
                 // Flush SDK events (task_started, task_progress) so background
@@ -2413,6 +2442,7 @@ function runHeadlessStreaming(
 
       if (heldBackResult) {
         output.enqueue(heldBackResult)
+        captureElioResult(heldBackResult)
         heldBackResult = null
         if (suggestionState.pendingSuggestion) {
           output.enqueue(suggestionState.pendingSuggestion)
@@ -4109,8 +4139,13 @@ function runHeadlessStreaming(
       }
 
       // Store worldview / user message for system prompt injection
+      // Also feed into memory graph (Fast Path + eventual Slow Path)
       if (message.type === 'worldview') {
-        setWorldview((message as any).worldview ?? null)
+        const worldviewText = (message as any).worldview ?? null
+        setWorldview(worldviewText)
+        if (worldviewText) {
+          getMemoryAgent()?.captureWorldview(worldviewText)
+        }
       } else if (message.type === 'user') {
         const userContent = message.message.content
         const userText = typeof userContent === 'string'
@@ -4119,6 +4154,9 @@ function runHeadlessStreaming(
             ? userContent.find((b: any) => b?.type === 'text')?.text || ''
             : ''
         setLastUserMessage(userText || null)
+        if (userText) {
+          getMemoryAgent()?.captureUserMessage(userText)
+        }
       }
 
       enqueue({

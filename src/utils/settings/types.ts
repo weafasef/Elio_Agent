@@ -671,6 +671,21 @@ export const SettingsSchema = lazySchema(() =>
         })
         .optional()
         .describe('Configures native and external WebSearch backends'),
+      memory: z
+        .object({
+          deepseekApiKey: z
+            .string()
+            .optional()
+            .describe('DeepSeek API key for Slow Path memory processing'),
+          deepseekModel: z
+            .string()
+            .optional()
+            .describe(
+              'DeepSeek model name for Slow Path memory processing (default: deepseek-v4-flash)',
+            ),
+        })
+        .optional()
+        .describe('Configures the Elio memory system (4D graph + DeepSeek Slow Path)'),
       sandbox: SandboxSettingsSchema().optional(),
       feedbackSurveyRate: z
         .number()

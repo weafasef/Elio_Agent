@@ -2597,8 +2597,30 @@ async function run(): Promise<CommanderCommand> {
       await import('./log-system/integration.js').then(m => m.initLogSystem());
     }
 
-    // 初始化 Elio 人格系统
-    await import('./elio/index.js').then(m => m.initElio());
+    // 初始化 Elio 人格系统 + 图记忆系统（并行）
+    const settings = getInitialSettings()
+    const memCfg = settings.memory as
+      | { deepseekApiKey?: string; deepseekModel?: string }
+      | undefined
+
+    await Promise.all([
+      import('./elio/index.js').then(m => m.initElio()),
+      memCfg?.deepseekApiKey
+        ? import('./elio/memory/MemoryAgent.js')
+            .then(m =>
+              m.initMemoryAgent({
+                apiKey: memCfg.deepseekApiKey!,
+                model: memCfg.deepseekModel,
+              }),
+            )
+            .catch(err => {
+              console.error(
+                '[Main] MemoryAgent init failed (non-fatal):',
+                err instanceof Error ? err.message : err,
+              )
+            })
+        : Promise.resolve(),
+    ]);
 
     // --print mode
     if (isNonInteractiveSession) {

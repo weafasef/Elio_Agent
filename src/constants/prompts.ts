@@ -57,7 +57,7 @@ import {
 import { SLEEP_TOOL_NAME } from '../tools/SleepTool/prompt.js'
 import { TICK_TAG } from './xml.js'
 import { logForDebugging } from '../utils/debug.js'
-import { loadMemoryPrompt } from '../memdir/memdir.js'
+import { ContextBridge } from '../elio/memory/ContextBridge.js'
 import { isUndercover } from '../utils/undercover.js'
 import { getTraitManager, buildPersonalityPrompt } from '../elio/index.js'
 import { getWorldview } from '../elio/worldview.js'
@@ -492,7 +492,7 @@ export async function getSystemPrompt(
 
 ${CYBER_RISK_INSTRUCTION}`,
       getSystemRemindersSection(),
-      await loadMemoryPrompt(),
+      ContextBridge.get(),
       envInfo,
       getLanguageSection(settings.language),
       // When delta enabled, instructions are announced via persisted
@@ -511,7 +511,7 @@ ${CYBER_RISK_INSTRUCTION}`,
     systemPromptSection('session_guidance', () =>
       getSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
     ),
-    systemPromptSection('memory', () => loadMemoryPrompt()),
+    systemPromptSection('memory', () => ContextBridge.get()),
     systemPromptSection('elio_personality', () => {
       const tm = getTraitManager()
       if (!tm) return null
