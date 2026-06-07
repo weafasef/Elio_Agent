@@ -34,6 +34,7 @@ import {
   LOCAL_COMMAND_STDOUT_TAG,
 } from '../../constants/xml.js'
 import { shouldCreateWorktreeForSessionLaunch } from '../services/repositoryLaunchService.js'
+import { WorldviewBuffer } from '../../elio/WorldviewBuffer.js'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
@@ -303,109 +304,16 @@ async function handleUserMessage(
     return
   }
 
-  // Send thinking status
-  sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Thinking' })
-
-  const initialRuntimeTransition = await waitForRuntimeTransitionBeforeUserTurn(ws, sessionId)
-  if (!initialRuntimeTransition.ok) return
-  if (initialRuntimeTransition.waited) {
-    sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Thinking' })
-  }
-
-  // Track and emit the first placeholder title before CLI startup/streaming.
-  let titleState = sessionTitleState.get(sessionId)
-  if (!titleState) {
-    titleState = {
-      userMessageCount: 0,
-      hasCustomTitle: !!(await sessionService.getCustomTitle(sessionId)),
-      firstUserMessage: '',
-      completedTurns: [],
-      startedGenerationKeys: new Set<string>(),
-      generationSeq: 0,
-    }
-    sessionTitleState.set(sessionId, titleState)
-  }
-  const titleInput = getTitleInputForUserMessage(message.content, desktopSlashCommand)
-  let titleTurnNumber: number | null = null
-  if (titleInput) {
-    titleState.userMessageCount++
-    titleTurnNumber = titleState.userMessageCount
-    titleState.activeTurn = {
-      count: titleTurnNumber,
-      userText: titleInput,
-      assistantText: '',
-    }
-    if (titleState.userMessageCount === 1) {
-      titleState.firstUserMessage = titleInput
-    }
-    triggerTitleGeneration(ws, sessionId, 'user-message')
-  }
-
-  // 启动 CLI 子进程（如果还没有）
-  try {
-    await ensureCliSessionStarted(ws, sessionId, 'user_message')
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err)
-    const code =
-      err instanceof ConversationStartupError ? err.code : 'CLI_START_FAILED'
-    console.error(`[WS] CLI start failed for ${sessionId}: ${errMsg}`)
-    sendMessage(ws, {
-      type: 'error',
-      message: await buildSessionStartupDiagnosticMessage(sessionId, errMsg),
-      code,
-      retryable:
-        err instanceof ConversationStartupError ? err.retryable : false,
-    })
-    sendMessage(ws, { type: 'status', state: 'idle' })
-    return
-  }
-
-  const startupRuntimeTransition = await waitForRuntimeTransitionBeforeUserTurn(ws, sessionId)
-  if (startupRuntimeTransition.ok) {
-    if (startupRuntimeTransition.waited) {
-      sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Thinking' })
-    }
-  } else {
-    return
-  }
-
-  // Register the callback before sending the turn so startup errors are not lost.
-  // Keep output muted until the current user turn is enqueued to avoid forwarding
-  // any pre-turn SDK chatter as fresh chat history.
-  let userMessageSent = false
-  const shouldForwardCurrentTurnLocalCommand =
-    createCurrentTurnLocalCommandForwarder(desktopSlashCommand)
-  const removeTitleOutputCallback = titleTurnNumber === null
-    ? null
-    : bindTitleSessionOutput(ws, sessionId, () => userMessageSent)
-
-  bindAllClientSessionOutputs(sessionId, {
-    shouldForward: (cliMsg) => {
-      if (userMessageSent || (cliMsg.type === 'result' && cliMsg.is_error)) {
-        return true
-      }
-      return shouldForwardCurrentTurnLocalCommand(cliMsg)
-    },
+  // 用户消息写入 WorldviewBuffer — Elio 在心跳 tick 时感知
+  // 不再走独立 CLI session（replaced by dual-agent main loop）
+  const text = message.content
+  console.log(`[WS] User message → WorldviewBuffer: "${text.slice(0, 100)}"`)
+  WorldviewBuffer.push({
+    type: 'user_message',
+    speaker: '主人',
+    text,
+    timestamp: new Date(),
   })
-
-  const sent = await conversationService.sendMessage(
-    sessionId,
-    message.content,
-    message.attachments
-  )
-  if (!sent) {
-    removeTitleOutputCallback?.()
-    discardActiveTitleTurn(sessionId, titleTurnNumber)
-    sendMessage(ws, {
-      type: 'error',
-      message: 'CLI process is not running. The session may have ended or the process crashed.',
-      code: 'CLI_NOT_RUNNING',
-    })
-    sendMessage(ws, { type: 'status', state: 'idle' })
-    return
-  }
-
-  userMessageSent = true
 }
 
 async function handleDesktopClearCommand(

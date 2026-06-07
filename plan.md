@@ -1274,62 +1274,153 @@ SlowPath:  每 30s 独立 tick，不等任何人
 
 ---
 
-### 第 3 轮：主循环重构（核心）
+### 第 3.1 轮：WorldviewBuffer — 用户消息接入 Elio 感知循环
 
-**目标：** heartbeatService 升级为 MainLoop，实现碎片化轮询。
+**目标：** 让用户消息进入 Elio 的世界感知，不再走独立 CLI session。
 
-#### 3.1 新建 `src/elio/InputBuffer.ts`
+#### 核心思路
+
+```
+【当前】
+用户 WS → handler.ts → 起独立 CLI → 回复原路返回 WS
+心跳 10s → buildWorldview() → sendWorldview('elio') → Elio reply
+
+两条线互不认识。
+
+【目标】
+用户 WS → WorldviewBuffer.push(msg)  →  不回复
+心跳 10s → drain() → buildWorldview(msgs) → Elio 感知 → 自主回复
+```
+
+Elio 是主动方，主人说话只是她世界观中的一个事件。
+
+#### 3.1.1 新建 `src/elio/WorldviewBuffer.ts`
 
 ```typescript
-// 累积外部输入的消息队列
-class InputBuffer {
-  private buffer: Message[] = []
+// 单条感知条目
+type Percept = {
+  type: 'user_message'       // 未来扩展: 'image', 'other_message', 'system_event'
+  speaker: string             // '主人' | 未来其他人名
+  text: string
+  timestamp: Date
+}
 
-  push(msg: Message): void    // 外部输入到达时写入
-  drain(): Message[]          // 取出并清空本周期所有消息
-  get length(): number        // 当前积压数量
+// 模块级变量 — 同 ContextBridge 的单例模式
+let buffer: Percept[] = []
+
+export const WorldviewBuffer = {
+  push(p: Percept): void     { buffer.push(p) }
+  drain(): Percept[]         { const b = [...buffer]; buffer = []; return b }
+  isEmpty(): boolean         { return buffer.length === 0 }
+
+  formatForWorldview(ps: Percept[]): string {
+    if (!ps.length) return ''
+    return ps.map(p =>
+      `${p.speaker}说 (${p.timestamp.toLocaleTimeString('zh-CN')}):\n"${p.text}"`
+    ).join('\n\n')
+  }
 }
 ```
 
-写入点：
-- 用户 HTTP/WS 消息到达 → `InputBuffer.push()`
-- 世界观 pulse → 不再单独发送，改为每轮读取时动态生成
-- 未来：视觉输入 → `InputBuffer.push()`
+**设计要点：**
+- 和 `ContextBridge` 同类模式：模块级单例，零依赖，同步读写
+- `push` — 外部事件到达立刻写入，fire-and-forget
+- `drain` — 取出 + 清空，防止同一条消息注入两次
+- `type` 字段为未来扩展预留（图像、系统事件、他人消息）
 
-#### 3.2 重构 heartbeatService → MainLoop
+#### 3.1.2 改 `src/server/ws/handler.ts` — `handleUserMessage`
+
+**删除：** 起独立 CLI (`ensureCliSessionStarted`)、绑定 output callback、`sendMessage`、`status: thinking/idle`、title generation
+
+**保留：** stop flag 清除、`/clear` 命令处理
+
+**替换为：**
+
+```typescript
+async function handleUserMessage(ws, message) {
+  sessionStopRequested.delete(sessionId)
+  clearPrewarmState(sessionId)
+
+  // /clear 命令保留
+  if (desktopSlashCommand?.commandName === 'clear') {
+    await handleDesktopClearCommand(ws)
+    return
+  }
+
+  const text = extractTextContent(message.content)
+  WorldviewBuffer.push({
+    type: 'user_message',
+    speaker: '主人',
+    text,
+    timestamp: new Date(),
+  })
+}
+```
+
+**影响：** 用户发消息后无立即回复——Elio 在下一轮 tick（最多 10s）才感知。未来 TTS 接入后 Elio 主动说话。
+
+#### 3.1.3 改 `src/server/services/heartbeatService.ts` — `buildWorldview`
+
+**新 `buildWorldview()`：**
+
+```typescript
+function buildWorldview(): string {
+  const percepts = WorldviewBuffer.drain()
+  const now = new Date()
+  const timeStr = now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+
+  const parts = [
+    `当前时间: ${timeStr}（${getTimeOfDay(now)}）`,
+    `本次持续运行: ${elapsedMin} 分钟`,
+  ]
+
+  if (percepts.length > 0) {
+    parts.push('')
+    parts.push('--- 本周期内的外部感知 ---')
+    parts.push(WorldviewBuffer.formatForWorldview(percepts))
+  }
+
+  parts.push('')
+  parts.push('你可以自主决定做点什么——写日记、整理记忆、安静待着。')
+  return parts.join('\n')
+}
+```
+
+**`tick()` 不改变** — 只改 `buildWorldview()` 的实现。
+
+#### 3.1.4 参数调整
 
 ```
-旧 heartbeatService:
-  setInterval 10s → 空闲? → 推送世界观 → wait 120s → Elio 回复
-
-新 MainLoop:
-  setInterval T_1s:
-    ① messages = InputBuffer.drain()
-    ② lastOutput = getLastOutput()           // Elio 上轮输出
-    ③ memoryCtx = ContextBridge.get()         // 里 Agent 合成
-    ④ worldview = buildWorldview()            // 时间/运行时长
-    ⑤ 组装完整 system prompt
-    ⑥ 一次 LLM query（自主决策）
-    ⑦ 存 lastOutput → 下一轮循环读取
-    ⑧ 记忆系统 hook（FastPath 在消息 push 时已触发）
+INTERVAL_MS = 10_000  // 保持不变（未来可降到 1s）
+WORK_TIMEOUT_MS = 120_000
 ```
 
-#### 3.3 Elio 输出捕获
+#### 3.1.5 不影响的模块
 
-每次 LLM 响应结束后：文字内容存为 `lastOutput`。下轮循环 Elio 读到它就知道自己"刚才在做什么"。
+- **Elio session** — 仍然由心跳 spawn，走 SDK WebSocket
+- **记忆系统** — ContextBridge、FastPath、SlowPath 零改动
+- **`sendWorldview`** — 格式不变，只是 worldview 文本里多了用户消息
+- **`busy` 锁** — 不变，Elio 在处理时就跳过 tick，buffer 不清空
 
-#### 3.4 记忆系统 — 零改动
+#### 3.1.6 改动清单
 
-FastPath 在消息推入 InputBuffer 时同步触发，SlowPath 30s 定时器照常运行。
+| 文件 | 操作 | 变化 |
+|------|------|------|
+| `src/elio/WorldviewBuffer.ts` | 新建 | ~40 行 |
+| `src/server/ws/handler.ts` | `handleUserMessage` 删 ~100 行，加 ~8 行 | -90 |
+| `src/server/services/heartbeatService.ts` | `buildWorldview` 加 ~8 行 | +8 |
+
+#### 3.1.7 后续子轮（主循环重构后续）
+
+| 子轮 | 内容 |
+|------|------|
+| 3.2 | `lastOutput` — Elio 上轮输出注入下一轮上下文，知道自己"刚才在做什么" |
+| 3.3 | `MainLoop` 重构 — 把 tick 逻辑从 heartbeatService 抽到独立模块 |
+| 3.4 | busy 锁→状态机 — 支持 Elio 在处理时也能累积输入，而不是跳过整轮 |
 
 ---
 
 ### 第 4 轮：碎片化运作（后续）
-
-参见 §4.4 表 Agent 碎片化运作：
-- Prompt 层面：每次只调 1-2 个工具，调完先汇报
-- 代码层面：工具结果间插旁白 mini LLM call
-- 并行降级：有插话需求时降低并发度
 
 ---
 

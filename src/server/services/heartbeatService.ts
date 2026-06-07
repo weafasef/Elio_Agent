@@ -10,6 +10,7 @@ import { conversationService } from './conversationService.js'
 import { SettingsService } from './settingsService.js'
 import { ProviderService } from './providerService.js'
 import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
+import { WorldviewBuffer } from '../../elio/WorldviewBuffer.js'
 
 const SESSION_ID = 'elio'
 const INTERVAL_MS = 10_000
@@ -45,6 +46,9 @@ export function stopHeartbeat(): void {
 // ── Internal ────────────────────────────────────────────────────────────
 
 function buildWorldview(): string {
+  // 取出本周期内所有的外部感知事件
+  const percepts = WorldviewBuffer.drain()
+
   const now = new Date()
   const timeStr = now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
   const hour = now.getHours()
@@ -59,11 +63,21 @@ function buildWorldview(): string {
 
   const elapsedMin = startTime ? Math.floor((Date.now() - startTime) / 60_000) : 0
 
-  return [
+  const parts = [
     `当前时间: ${timeStr}（${timeOfDay}）`,
     `本次持续运行: ${elapsedMin} 分钟`,
-    `你可以自主决定做点什么——写日记、整理记忆、安静待着。`,
-  ].join('\n')
+  ]
+
+  // 如果有外部感知事件，拼入worldview
+  if (percepts.length > 0) {
+    parts.push('')
+    parts.push('--- 本周期内的外部感知 ---')
+    parts.push(WorldviewBuffer.formatForWorldview(percepts))
+  }
+
+  parts.push('')
+  parts.push('你可以自主决定做点什么——写日记、整理记忆、安静待着。')
+  return parts.join('\n')
 }
 
 async function tick(): Promise<void> {
