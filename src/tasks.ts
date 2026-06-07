@@ -1,6 +1,5 @@
 import { feature } from 'bun:bundle'
 import type { Task, TaskType } from './Task.js'
-import { DreamTask } from './tasks/DreamTask/DreamTask.js'
 import { LocalAgentTask } from './tasks/LocalAgentTask/LocalAgentTask.js'
 import { LocalShellTask } from './tasks/LocalShellTask/LocalShellTask.js'
 import { RemoteAgentTask } from './tasks/RemoteAgentTask/RemoteAgentTask.js'
@@ -24,7 +23,7 @@ export function getAllTasks(): Task[] {
     LocalShellTask,
     LocalAgentTask,
     RemoteAgentTask,
-    DreamTask,
+    // DreamTask removed — autoDream replaced by graph memory system
   ]
   if (LocalWorkflowTask) tasks.push(LocalWorkflowTask)
   if (MonitorMcpTask) tasks.push(MonitorMcpTask)

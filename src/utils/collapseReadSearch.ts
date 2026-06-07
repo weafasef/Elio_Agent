@@ -31,9 +31,7 @@ import {
 } from './memoryFileDetection.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
-const teamMemOps = feature('TEAMMEM')
-  ? (require('./teamMemoryOps.js') as typeof import('./teamMemoryOps.js'))
-  : null
+// teamMemoryOps removed — TEAMMEM feature gate always false
 const SNIP_TOOL_NAME = feature('HISTORY_SNIP')
   ? (
       require('../tools/SnipTool/prompt.js') as typeof import('../tools/SnipTool/prompt.js')
@@ -639,11 +637,7 @@ function createEmptyGroup(): GroupAccumulator {
     hookCount: 0,
     hookInfos: [],
   }
-  if (feature('TEAMMEM')) {
-    group.teamMemorySearchCount = 0
-    group.teamMemoryReadFilePaths = new Set()
-    group.teamMemoryWriteCount = 0
-  }
+  // teamMemorySync removed — TEAMMEM feature gate always false
   group.mcpCallCount = 0
   group.mcpServerNames = new Set()
   if (isFullscreenEnvEnabled()) {
@@ -677,13 +671,9 @@ function createCollapsedGroup(
   const toolMemoryReadCount = group.memoryReadFilePaths.size
   const memoryReadCount =
     toolMemoryReadCount + (group.relevantMemories?.length ?? 0)
-  // Non-memory read file paths: exclude memory and team memory paths
-  const teamMemReadPaths = feature('TEAMMEM')
-    ? group.teamMemoryReadFilePaths
-    : undefined
+  // Non-memory read file paths: exclude memory paths (team memory removed)
   const nonMemReadFilePaths = [...group.readFilePaths].filter(
-    p =>
-      !group.memoryReadFilePaths.has(p) && !(teamMemReadPaths?.has(p) ?? false),
+    p => !group.memoryReadFilePaths.has(p),
   )
   const teamMemSearchCount = feature('TEAMMEM')
     ? (group.teamMemorySearchCount ?? 0)

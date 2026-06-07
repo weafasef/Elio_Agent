@@ -20,7 +20,7 @@ import { handleLocalFile } from './api/localFile.js'
 import { sessionService } from './services/sessionService.js'
 import { conversationService } from './services/conversationService.js'
 import { OPENAI_CODEX_REDIRECT_PATH } from '../services/openaiAuth/client.js'
-import { ensureDesktopCliLauncherInstalled } from './services/desktopCliLauncherService.js'
+// ensureDesktopCliLauncherInstalled removed — desktop app removed
 import { enableConfigs } from '../utils/config.js'
 import { diagnosticsService } from './services/diagnosticsService.js'
 import { startHeartbeat, stopHeartbeat } from './services/heartbeatService.js'
@@ -446,13 +446,6 @@ export function startServer(port = PORT, host = HOST) {
 
   // Start Elio's heartbeat — keeps her continuously working
   startHeartbeat(serverPort)
-
-  void ensureDesktopCliLauncherInstalled().catch((error) => {
-    console.error(
-        '[desktop-cli-launcher] failed to install bundled launcher:',
-        error instanceof Error ? error.message : error,
-    )
-  })
 
   console.log(`[Server] Claude Code API server running at http://${host}:${serverPort}`)
   return server

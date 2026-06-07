@@ -7,7 +7,6 @@ import { useTerminalSize } from 'src/hooks/useTerminalSize.js';
 import { useAppState, useSetAppState } from 'src/state/AppState.js';
 import { enterTeammateView, exitTeammateView } from 'src/state/teammateViewHelpers.js';
 import type { ToolUseContext } from 'src/Tool.js';
-import { DreamTask, type DreamTaskState } from 'src/tasks/DreamTask/DreamTask.js';
 import { InProcessTeammateTask } from 'src/tasks/InProcessTeammateTask/InProcessTeammateTask.js';
 import type { InProcessTeammateTaskState } from 'src/tasks/InProcessTeammateTask/types.js';
 import type { LocalAgentTaskState } from 'src/tasks/LocalAgentTask/LocalAgentTask.js';
@@ -36,7 +35,6 @@ import { Dialog } from '../design-system/Dialog.js';
 import { KeyboardShortcutHint } from '../design-system/KeyboardShortcutHint.js';
 import { AsyncAgentDetailDialog } from './AsyncAgentDetailDialog.js';
 import { BackgroundTask as BackgroundTaskComponent } from './BackgroundTask.js';
-import { DreamDetailDialog } from './DreamDetailDialog.js';
 import { InProcessTeammateDetailDialog } from './InProcessTeammateDetailDialog.js';
 import { RemoteSessionDetailDialog } from './RemoteSessionDetailDialog.js';
 import { ShellDetailDialog } from './ShellDetailDialog.js';
@@ -90,11 +88,12 @@ type ListItem = {
   status: string;
   task: DeepImmutable<MonitorMcpTaskState>;
 } | {
+  // DreamTask removed — replaced by graph memory system. Type kept for typecheck compatibility.
   id: string;
   type: 'dream';
   label: string;
   status: string;
-  task: DeepImmutable<DreamTaskState>;
+  task: DeepImmutable<{ type: 'dream'; status: string; startTime: number; endTime?: number; description: string; id: string }>;
 } | {
   id: string;
   type: 'leader';
@@ -312,9 +311,8 @@ export function BackgroundTasksDialog({
   async function killTeammateTask(taskId_1: string): Promise<void> {
     await InProcessTeammateTask.kill(taskId_1, setAppState);
   }
-  async function killDreamTask(taskId_2: string): Promise<void> {
-    await DreamTask.kill(taskId_2, setAppState);
-  }
+  // DreamTask removed — replaced by graph memory system
+  async function killDreamTask(_taskId: string): Promise<void> {}
   async function killRemoteAgentTask(taskId_3: string): Promise<void> {
     await RemoteAgentTask.kill(taskId_3, setAppState);
   }

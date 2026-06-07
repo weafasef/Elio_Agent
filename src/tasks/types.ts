@@ -1,8 +1,9 @@
 // Union of all concrete task state types
 // Use this for components that need to work with any task type
 
-import type { DreamTaskState } from './DreamTask/DreamTask.js'
 import type { InProcessTeammateTaskState } from './InProcessTeammateTask/types.js'
+// DreamTask removed — inline stub type kept for compatibility
+type DreamTaskState = { type: 'dream'; status: string; startTime: number; endTime?: number; description: string; id: string }
 import type { LocalAgentTaskState } from './LocalAgentTask/LocalAgentTask.js'
 import type { LocalShellTaskState } from './LocalShellTask/guards.js'
 import type { LocalWorkflowTaskState } from './LocalWorkflowTask/LocalWorkflowTask.js'

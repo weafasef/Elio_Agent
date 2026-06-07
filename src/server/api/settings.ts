@@ -12,7 +12,6 @@
 
 import { SettingsService } from '../services/settingsService.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
-import { ensureDesktopCliLauncherInstalled } from '../services/desktopCliLauncherService.js'
 import { conversationService } from '../services/conversationService.js'
 
 const settingsService = new SettingsService()
@@ -49,9 +48,6 @@ export async function handleSettingsApi(
       case 'project':
         return await handleProjectSettings(req, url)
 
-      case 'cli-launcher':
-        if (method !== 'GET') throw methodNotAllowed(method)
-        return Response.json(await ensureDesktopCliLauncherInstalled())
 
       default:
         throw ApiError.notFound(`Unknown settings endpoint: ${sub}`)
