@@ -945,7 +945,12 @@ LLM 流式输出:
   - `logForDebugging()` — 结构化 JSONL 调试日志
   - LLM Cache — prompt 直作 Map key，上限 500 条
 
-### 第 4 步：旧系统清理 ⚠️ 已回退，见下方 §5 重构计划
+### ✅ 第 4 步：旧系统清理（在第 1 轮完成）
+- ✅ 删除 `src/services/extractMemories/`（2 个文件）
+- ✅ 删除 `src/services/autoDream/`（4 个文件）
+- ✅ 删除 `src/elio/autoAdjust.ts`
+- ✅ `src/memdir/` 全部存根化（memdir.ts → `loadMemoryPrompt()` 返回 null，teamMemPaths.ts → `isTeamMemoryEnabled()` 返回 false，等）
+- ✅ 表 Agent 提示词精简：旧记忆指南截切到[附录 A](#附录-a已截切的旧记忆操作指南)
 
 ### 第 5 步：向量检索增强（后续）
 - 为事件节点添加 embedding 字段
@@ -1167,22 +1172,23 @@ SlowPath:  每 30s 独立 tick，不等任何人
 
 ### 不需要的东西
 
-| 模块 | 说明 | 理由 |
+| 模块 | 状态 | 说明 |
 |------|------|------|
-| 独立 CLI TUI | `cli.tsx` 一问一答模式 + Ink 渲染 | 只需要 server 路径 |
-| Desktop 桌面端 | `desktop/`, `src/bridge/` | 不是桌面应用 |
-| 旧 Markdown 记忆 | `src/memdir/` (9 文件) | 已替换为图记忆系统 |
-| extractMemories | `src/services/extractMemories/` | 旧记忆提取后台任务 |
-| autoDream | `src/services/autoDream/` | 旧记忆整合后台任务 |
-| autoAdjust | `src/elio/autoAdjust.ts` | 旧人格调整机制 |
-| 团队记忆 | `src/services/teamMemorySync/` | 单用户场景不需要 |
-| DreamTask UI | `src/tasks/DreamTask/` + `DreamDetailDialog.tsx` | 旧 dream UI |
+| 独立 CLI TUI | ⏳ 未动 | `cli.tsx` 一问一答模式 + Ink 渲染，只需要 server 路径 |
+| Desktop 桌面端 | ✅ | `desktop/` 目录删除（150+ 文件） |
+| Bridge 远程控制 | ✅ | `src/bridge/` 根除（15 文件），20+ 引用点修复，分 3 子批完成 |
+| 旧 Markdown 记忆 | ✅ | `src/memdir/` (9 文件) 全部存根化 |
+| extractMemories | ✅ | `src/services/extractMemories/` 物理删除 |
+| autoDream | ✅ | `src/services/autoDream/` 物理删除 |
+| autoAdjust | ✅ | `src/elio/autoAdjust.ts` 物理删除 |
+| 团队记忆 | ✅ | `src/services/teamMemorySync/` + `teamMemoryOps.ts` 删除 |
+| DreamTask UI | ✅ | `src/tasks/DreamTask/` + `DreamDetailDialog.tsx` 删除 |
 
 ## 5.3 执行步骤
 
-### 第 1 轮：旧系统清理（回退重做）
+### ✅ 第 1 轮：旧系统清理（commit `a7b3459`）
 
-**目标：** 删除/存根化所有旧记忆系统代码，不引入 bug。
+**目标：** 删除/存根化所有旧记忆系统代码。
 
 #### 删除目录/文件（物理删除）
 
@@ -1222,20 +1228,49 @@ SlowPath:  每 30s 独立 tick，不等任何人
 
 ---
 
-### 第 2 轮：裁剪非必需入口与模块
+### ✅ 第 2 轮：裁剪非必需入口与模块（commit `0f56f24`）
 
 **目标：** 删除不属于 Server 模式的一切。
 
-| 操作 | 目标 | 说明 |
+| 操作 | 目标 | 状态 |
 |------|------|------|
-| 删 | `desktop/` 目录 | 桌面端构建产物和配置 |
-| 删 | `src/bridge/` | VSCode/桌面端 IPC 桥 |
-| 删 | `src/services/teamMemorySync/` | 团队记忆同步 |
-| 删 | `src/utils/teamMemoryOps.ts` | 团队记忆操作 |
-| 删 | `src/tasks/DreamTask/` | 等 memdir 存根化后安全删除 |
-| 改 | `cli.tsx` | 删除 TUI 分支，只保留 `--session-id` 等 server 参数路径 |
+| 删 | `desktop/` 目录（150+ 文件） | ✅ |
+| 删 | `src/bridge/` → 存根化（15 个存根，`isBridgeEnabled()`→false） | ✅ |
+| 删 | `src/services/teamMemorySync/` | ✅ |
+| 删 | `src/utils/teamMemoryOps.ts` | ✅ |
+| 删 | `src/tasks/DreamTask/` + `DreamDetailDialog.tsx` | ✅ |
+| 删 | `src/commands/bridge-kick.ts` | ✅ |
+| 改 | `cli.tsx` bridge fast-path 移除 | ✅ |
+| 改 | `server/` desktop CLI launcher 移除 | ✅ |
+| ⏳ | `cli.tsx` TUI 分支 | 未动 |
 
-**验证标准：** Server 启动正常，无 broken import
+**验证标准：** Server 启动正常，无 broken import ✅
+
+---
+
+### ✅ 第 2.5 轮：bridge/ 根除（commits `63e892c` → `9e602de`）
+
+第 2 轮只做了存根化——bridge/ 目录保留 15 个空壳文件。本轮彻底删除。
+
+**为什么分出来：** bridge/ 被 27 个文件引用，分布在 TUI 组件、CLI 传输层、权限处理器、状态管理等位置。上次用 sed 批量修改 TUI 文件造成语法错误。本轮改为每个文件用 Edit 精确替换，每改 1-2 个立刻验证 server。
+
+**执行分批（每批独立 commit）：**
+
+| 批次 | 文件 | commit |
+|------|------|--------|
+| login/logout/ultraplan/rename | 4 个命令文件删 bridge import | `63e892c`, `e75c3fd` |
+| 13 文件批量 + 3 工具搬迁 | upload/SendMessageTool/remoteIO/ccrClient/useRemoteSession/Spinner/interactiveHandler/AppStateStore/config/product + boundedUuidSet/jwtExpiry/shimmer → utils/ | `5f75123` |
+| TUI 清理 | useReplBridge 存根(726→15行) + PromptInputFooter 删 BridgeStatusIndicator + 删 BridgeDialog/RemoteCallout + REPL/PromptInput 清理 | `adb90b6` |
+| print.ts + 收尾 | 删 4 个 import + ~130 行 remote_control 块 + 删除 bridge/ 目录 | `9e602de` |
+
+**搬迁的通用工具：**
+| 从 bridge/ | 到 utils/ | 原因 |
+|------------|----------|------|
+| `bridgeMessaging.ts` → `BoundedUUIDSet` | `boundedUuidSet.ts` | 通用有界 UUID 集合，非 bridge 专用 |
+| `jwtUtils.ts` → `decodeJwtExpiry` | `jwtExpiry.ts` | 通用 JWT 过期检查 |
+| `bridgeStatusUtil.ts` → shimmer 函数 | `shimmer.ts` | brief 模式闪烁动画，非 bridge 专用 |
+
+**验证标准：** 每次提交后 Server 启动正常 ✅
 
 ---
 
@@ -1298,23 +1333,25 @@ FastPath 在消息推入 InputBuffer 时同步触发，SlowPath 30s 定时器照
 
 ---
 
-## 5.4 文件改动预估
+## 5.4 实际完成情况
 
-| 轮次 | 新增 | 删除 | 修改 |
-|------|------|------|------|
-| 第 1 轮：旧系统清理 | 0 | ~8 文件 | ~15 文件 |
-| 第 2 轮：裁剪入口 | 0 | ~10+ 文件 | ~3 文件 |
-| 第 3 轮：主循环重构 | `InputBuffer.ts`, `MainLoop.ts` | 0 | `server/index.ts` 等 |
-| 第 4 轮：碎片化 | 0 | 0 | prompt + 工具调度 |
-| **合计** | **~2** | **~18+** | **~20** |
+| 轮次 | 新增 | 删除 | 修改 | commits |
+|------|------|------|------|---------|
+| 第 1 轮：旧系统清理 | 0 | ~8 文件 | ~15 文件 | `a7b3459` |
+| 第 2 轮：裁剪入口 | 0 | ~160 文件 (含 desktop/) | ~30 文件 | `0f56f24` |
+| 第 2.5 轮：bridge 根除 | 3 utils 文件 | 17 文件 | ~20 文件 | `63e892c`→`9e602de` (5 个) |
+| ⏳ 第 3 轮：主循环重构 | `InputBuffer.ts`, `MainLoop.ts` | 0 | `server/index.ts` 等 |
+| ⏳ 第 4 轮：碎片化 | 0 | 0 | prompt + 工具调度 |
+| **已完成** | **3** | **~185** | **~65** | **8 个 commits** |
 
-## 5.5 执行原则
+## 5.5 执行原则（经验总结）
 
 1. **逐轮推进** — 一轮完成并推送后再开始下一轮
-2. **每轮结束验证** — `bun build` + Server 启动 + 无回归
-3. **独立 commit** — 每轮一个 commit，方便回退
+2. **每轮结束验证** — Server 启动 + 无回归
+3. **逐文件提交** — 涉及 TUI/React 的文件（PromptInput、REPL、Spinner 等）不能用 sed 批量改。每个文件用 Edit 精确替换，改完立刻验证 server，验证通过再 commit。bridge 根除拆分成了 5 个 commit 就是这个原因
 4. **先删后建** — 先清干净旧代码，再建新架构
 5. **`paths.ts` 不动** — 它是新旧系统的桥，`isAutoMemoryEnabled()` 等仍被广泛引用
+6. **Server 端口轮换** — 验证时每次换新端口（3470→3471→…），避免前一进程残留占用端口导致误判 crash
 
 ---
 
