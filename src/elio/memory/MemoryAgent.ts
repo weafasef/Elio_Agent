@@ -118,10 +118,9 @@ export class MemoryAgent {
 
   start(): void {
     this.slowPath.start()
-    logForDebugging(
-      `[Memory] Started (${this.graph.eventCount} events, ` +
-      `${this.graph.edgeCount} edges, ${this.index.getKeywordCount()} keywords)`,
-    )
+    const msg = `[Memory] 里Agent启动 (${this.graph.eventCount} 事件, ${this.graph.edgeCount} 边, ${this.index.getKeywordCount()} 关键词)`
+    console.log(msg)
+    logForDebugging(msg)
   }
 
   stop(): void {

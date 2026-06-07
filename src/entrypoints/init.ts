@@ -208,6 +208,16 @@ export const init = memoize(async (): Promise<void> => {
       })
     }
 
+    // Validate memory system config — actual init happens in main.tsx
+    const { getInitialSettings } = await import('../utils/settings/settings.js')
+    const settings = getInitialSettings()
+    const memCfg = settings.memory as { deepseekApiKey?: string; deepseekModel?: string } | undefined
+    if (!memCfg?.deepseekApiKey) {
+      const msg = '[init] 表里双Agent: 缺少 memory.deepseekApiKey，请在 .claude/settings.local.json 中配置 DeepSeek API key'
+      logForDebugging(msg)
+      throw new Error(msg)
+    }
+
     logForDiagnosticsNoPII('info', 'init_completed', {
       duration_ms: Date.now() - initStartTime,
     })

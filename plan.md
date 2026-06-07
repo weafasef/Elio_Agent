@@ -4,6 +4,14 @@
 提示词最好统一管理，让elio自己探索的提示词到时候改一下，都放在prompt文件里
 记忆系统的提示词也看看能不能放一起管理
 
+## 启动
+windows powershell启动
+
+Server 模式（给桌面 UI 用）：
+
+bun src/server/index.ts --port 3456
+
+
 ## 目标
 
 将 Elio 从"按需启动的终端 AI 助手"改造为 **持续运行的桌面 AI 伴侣**。
@@ -809,7 +817,8 @@ API 调用:
     user: "帮我看看 heartbeatService.ts 里有没有 bug"
   ]
 
-LLM 返回:
+LLM 返回:bun run ./bin/claude-haha server --port 3456
+
   assistant: {
     text: "让我先读一下这个文件。",
     tool_use: [{ id: "toolu_001", name: "Read", input: { file_path: "..." } }]

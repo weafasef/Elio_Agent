@@ -7,7 +7,6 @@
  */
 
 import { conversationService } from './conversationService.js'
-import * as os from 'node:os'
 import { SettingsService } from './settingsService.js'
 import { ProviderService } from './providerService.js'
 import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
@@ -105,7 +104,7 @@ async function startSession(): Promise<void> {
 
   const runtime = await getRuntimeSettings()
 
-  await conversationService.startSession(SESSION_ID, os.homedir(), sdkUrl, {
+  await conversationService.startSession(SESSION_ID, process.cwd(), sdkUrl, {
     permissionMode: 'bypassPermissions',
     model: runtime.model,
     providerId: runtime.providerId,
