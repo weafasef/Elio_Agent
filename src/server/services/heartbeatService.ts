@@ -25,6 +25,7 @@ let port = 0
 let safetyTimer: ReturnType<typeof setTimeout> | null = null
 let sessionReady = false
 let startTime: number | null = null
+let lastElioOutput: string | null = null
 
 export function startHeartbeat(serverPort: number): void {
   if (intervalId) return
@@ -64,20 +65,29 @@ function buildWorldview(): string {
   const elapsedMin = startTime ? Math.floor((Date.now() - startTime) / 60_000) : 0
 
   const parts = [
-    `当前时间: ${timeStr}（${timeOfDay}）`,
-    `本次持续运行: ${elapsedMin} 分钟`,
+    '当前时间: ' + timeStr + '（' + timeOfDay + '）',
+    '已持续运行: ' + elapsedMin + ' 分钟',
   ]
 
-  // 如果有外部感知事件，拼入worldview
+  // 外部感知事件
   if (percepts.length > 0) {
     parts.push('')
-    parts.push('--- 本周期内的外部感知 ---')
+    parts.push('--- 本周期内的外部事件 ---')
     parts.push(WorldviewBuffer.formatForWorldview(percepts))
+  } else {
+    parts.push('本周期内无外部事件。')
   }
 
-  parts.push('')
-  parts.push('你可以自主决定做点什么——写日记、整理记忆、安静待着。')
-  return parts.join('\n')
+  // Elio 上轮行为
+  if (lastElioOutput) {
+    parts.push('')
+    parts.push('你上轮的行为:')
+    parts.push(lastElioOutput)
+    lastElioOutput = null
+  }
+
+  // 包裹在 <worldview> 标签中
+  return '<worldview>\n' + parts.join('\n') + '\n</worldview>'
 }
 
 async function tick(): Promise<void> {
@@ -208,7 +218,10 @@ function onOutput(msg: any): void {
     }
     console.log(`[Heartbeat] result: is_error=${msg.is_error}, tokens=${msg.usage?.input_tokens ?? 0}+${msg.usage?.output_tokens ?? 0}`)
   } else if (msg?.type === 'assistant') {
-    if (content) console.log(`[Heartbeat] Elio: ${truncate(content)}`)
+    if (content) {
+      lastElioOutput = content
+      console.log(`[Heartbeat] Elio: ${truncate(content)}`)
+    }
   } else if (msg?.type === 'stream_event') {
     // skip — partial chunks; final text logged by assistant event
   } else if (msg?.type === 'user') {

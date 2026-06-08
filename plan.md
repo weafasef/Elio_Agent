@@ -1,8 +1,8 @@
 # Elio 改造计划
 
 ## 提醒
-提示词最好统一管理，让elio自己探索的提示词到时候改一下，都放在prompt文件里
-记忆系统的提示词也看看能不能放一起管理
+提示词已统一整理到 [prompts.md](prompts.md)，包含完整原文、组装流程、注入位置和 token 估算。
+elio 自己探索的提示词也放在 prompt 文件里，记忆系统的提示词也放一起管理了。
 
 ## 启动
 windows powershell启动
@@ -54,6 +54,8 @@ Server 模式下，每个用户会话 fork 一个 CLI 子进程。CLI 子进程 
 ---
 
 ## 1.2 提示词组装链路
+
+> 📋 完整提示词原文见 [prompts.md](prompts.md) 第二章（静态段）和第三章（动态段）。
 
 ```
 每次 LLM 调用 (REPL.tsx / QueryEngine)
@@ -110,6 +112,8 @@ Server 模式下，每个用户会话 fork 一个 CLI 子进程。CLI 子进程 
 ---
 
 ## 1.3 人格系统
+
+> 📋 人格提示词原文见 [prompts.md](prompts.md) 3.2 节。
 
 ### 特质文件：`~/.elio/personality/traits.json`
 
@@ -174,14 +178,17 @@ export function getCurrentPersonalityMode() {
 
 ## 1.4 世界观注入
 
-心跳不发送任务指令，而是发送**世界观感知信息**，作为系统提示词动态段注入，Elio 感知世界后自主决定行为。
+> 🌐 世界观提示词原文及新增的 "Understanding the conversation" 段见 [prompts.md](prompts.md) 2.1 节和 3.3 节。
+
+世界观不再通过 system prompt 动态段注入（`elio_worldview` 段已删除，`src/elio/worldview.ts` 已删除），而是作为 **user message 直接进入对话历史**。
 
 ### 完整链路
 
 ```
 心跳 (heartbeatService.ts) 每 10s
   │
-  ├─ buildWorldview() → "当前时间: 2026-06-06 02:30（深夜）\n本次持续运行: 45 分钟\n你可以自主决定..."
+  ├─ buildWorldview() → "<worldview>\n当前时间: 15:30（下午）\n已持续运行: 45 分钟\n...</worldview>"
+  │   包含: 时间 + 运行时长 + 外部事件(WorldviewBuffer.drain) + 上轮输出(lastElioOutput)
   │
   ├─ conversationService.sendWorldview(SESSION_ID, worldview)
   │     └─ sendSdkMessage({ type: 'worldview', worldview })
@@ -190,43 +197,48 @@ export function getCurrentPersonalityMode() {
 SDK WebSocket → CLI 子进程 (print.ts)
   │
   ├─ message.type === 'worldview' →
-  │     ├─ setWorldview(worldview)      ← 存入模块变量
-  │     ├─ enqueue + run                ← 触发新回合
+  │     ├─ worldviewText → captureWorldview(记忆系统)
+  │     └─ enqueue({ value: worldviewText }) → 世界观文本 = user message 内容
   │
   ▼
-getSystemPrompt() → 动态段注册 (prompts.ts)
+ask({ prompt: worldviewText }) → processUserInput → processTextPrompt
   │
-  ├─ systemPromptSection('elio_worldview', () => getWorldview())
-  │     → "# Elio 对周围世界的感知\n当前时间: ...\n你可以自主决定..."
-  │
-  ▼
-LLM 收到完整系统提示词 → Elio 感知世界 → 自主决定行为
+  └─ createUserMessage({ content: '<worldview>...' })
+        → mutableMessages 中自然累积
 ```
 
-### 世界观内容 (buildWorldview)
+### 注入到 LLM 时的形态
 
-- `当前时间: 2026-06-06 14:30:00（下午）` — 北京时间，含时段描述
-- `本次持续运行: 45 分钟` — 从心跳首次启动计时
-- `你可以自主决定做点什么——写日记、整理记忆、安静待着。`
+```
+system: "你是 Elio... <worldview>...</worldview> 是系统感知，不是主人说话..."
+        (不含世界观文本)
+
+messages:
+  user: <worldview>当前时间 15:30 下午 无外部事件 你上轮整理了记忆</worldview>
+  assistant: 继续整理...
+  user: <worldview>当前时间 15:30:10 主人说: "帮我看看这个" 你上轮整理了 3 条</worldview>
+  assistant: 好的主人...
+```
 
 ### 与旧方案的区别
 
-| | 旧（任务指令） | 新（世界观注入） |
+| | 旧（system prompt 注入） | 新（对话消息层注入） |
 |---|---|---|
-| 心跳发送 | `sendMessage("Elio，写点东西...")` | `sendWorldview("当前时间...")` |
-| 注入位置 | user message（用户级） | system prompt 动态段（系统级） |
-| Elio 行为 | 被动执行指令 | 自主感知 + 决策 |
+| 注入位置 | system prompt 动态段 | user message 内容 |
+| 存储 | `worldview.ts` 模块变量 | 心跳直接生成文本 |
+| 触发回合 | `enqueue('')` 空串 | `enqueue(worldviewText)` 有内容 |
+| 累积 | 每轮覆盖，无历史 | 对话历史中自然累积 |
+| Elio 获知方式 | "对周围世界的感知" | 系统提示词告知 `<worldview>` 含义 |
 
-### 文件改动记录
+### 文件改动记录（含本次改造）
 
 | 文件 | 改动 |
 |------|------|
-| `src/elio/worldview.ts` | **新建**。`getWorldview()` / `setWorldview()` 模块级状态存储 |
-| `src/server/services/conversationService.ts` | 新增 `sendWorldview()` 方法 |
-| `src/cli/print.ts` | 消息分发循环中新增 `worldview` 类型处理 |
-| `src/cli/structuredIO.ts` | `processLine()` 白名单增加 `worldview` 类型 |
-| `src/constants/prompts.ts` | 动态段注册 `elio_worldview` |
-| `src/server/services/heartbeatService.ts` | 用 `buildWorldview()` + `sendWorldview()` 替代硬编码 |
+| `src/elio/worldview.ts` | **删除**。世界观不再走 system prompt |
+| `src/constants/prompts.ts` | 删 `elio_worldview` 动态段 + `getWorldview` import；新增 "Understanding the conversation" 段 |
+| `src/cli/print.ts` | 删 `setWorldview/setLastUserMessage`；世界观 `value` 从 `''` 改为 worldview 文本 |
+| `src/server/services/heartbeatService.ts` | `buildWorldview` 包裹 `<worldview>` 标签 + 捕获 Elio 上轮输出 (`lastElioOutput`) |
+| `src/server/services/conversationService.ts` | `sendWorldview()` 方法（前期已有） |
 
 ---
 
@@ -428,6 +440,8 @@ Elio: "上次那个订单超时就是同步回调搞的吧..."
 
 **后台轮询，调 DeepSeek v4 Flash（独立 API key），不阻塞任何人。**
 
+> 📋 Slow Path 的三个 DeepSeek prompt 原文见 [prompts.md](prompts.md) 5.1-5.3 节。
+
 ```
   Slow Path 定时器 (每 30s 从队列取一个事件)
       │
@@ -592,6 +606,8 @@ interface Edge {
 ```
 
 ## 2.7 上下文注入
+
+> 📋 记忆提示词原文（Slow Path 三个 DeepSeek prompt）见 [prompts.md](prompts.md) 第五章。
 
 里 Agent 维护一个内存变量 `sharedContext: string`，表 Agent 组装系统提示词时同步读取。
 
@@ -1431,9 +1447,11 @@ WORK_TIMEOUT_MS = 120_000
 | 第 1 轮：旧系统清理 | 0 | ~8 文件 | ~15 文件 | `a7b3459` |
 | 第 2 轮：裁剪入口 | 0 | ~160 文件 (含 desktop/) | ~30 文件 | `0f56f24` |
 | 第 2.5 轮：bridge 根除 | 3 utils 文件 | 17 文件 | ~20 文件 | `63e892c`→`9e602de` (5 个) |
-| ⏳ 第 3 轮：主循环重构 | `InputBuffer.ts`, `MainLoop.ts` | 0 | `server/index.ts` 等 |
+| 第 3.0 轮：世界观消息层重构 | 0 | 1 (`worldview.ts`) | 4 (`prompts.ts`, `print.ts`, `heartbeatService.ts`, `plan.md`) | 待提交 |
+| ⏳ 第 3.1 轮：WorldviewBuffer（已完成） | `WorldviewBuffer.ts` | 0 | `handler.ts`, `heartbeatService.ts` | `0223b4a` |
+| ⏳ 第 3.2-3.4 轮：主循环重构 | `InputBuffer.ts`, `MainLoop.ts` | 0 | `server/index.ts` 等 |
 | ⏳ 第 4 轮：碎片化 | 0 | 0 | prompt + 工具调度 |
-| **已完成** | **3** | **~185** | **~65** | **8 个 commits** |
+| **已完成** | **4** | **~186** | **~69** | **9 个 commits** |
 
 ## 5.5 执行原则（经验总结）
 

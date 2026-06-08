@@ -50,7 +50,6 @@ import {
   getCommandsByMaxPriority,
 } from 'src/utils/messageQueueManager.js'
 import { notifyCommandLifecycle } from 'src/utils/commandLifecycle.js'
-import { setWorldview, setLastUserMessage } from '../elio/worldview.js'
 import { getMemoryAgent } from '../elio/memory/MemoryAgent.js'
 import {
   getSessionState,
@@ -3965,14 +3964,15 @@ function runHeadlessStreaming(
         trackReceivedMessageUuid(message.uuid)
       }
 
-      // Store worldview / user message for system prompt injection
-      // Also feed into memory graph (Fast Path + eventual Slow Path)
+      // Feed worldview / user message into memory graph
+      // Worldview text becomes the user-message content (no more empty prompts)
+      let promptValue: string | Array<any>
       if (message.type === 'worldview') {
         const worldviewText = (message as any).worldview ?? null
-        setWorldview(worldviewText)
         if (worldviewText) {
           getMemoryAgent()?.captureWorldview(worldviewText)
         }
+        promptValue = (message as any).worldview ?? ''
       } else if (message.type === 'user') {
         const userContent = message.message.content
         const userText = typeof userContent === 'string'
@@ -3980,19 +3980,17 @@ function runHeadlessStreaming(
           : Array.isArray(userContent)
             ? userContent.find((b: any) => b?.type === 'text')?.text || ''
             : ''
-        setLastUserMessage(userText || null)
         if (userText) {
           getMemoryAgent()?.captureUserMessage(userText)
         }
+        promptValue = message.message.content
+      } else {
+        promptValue = ''
       }
 
       enqueue({
         mode: 'prompt' as const,
-        // Worldview: no user input needed (context is in system prompt)
-        // User: normal message content
-        value: message.type === 'worldview'
-          ? ''
-          : message.message.content,
+        value: promptValue,
         uuid: message.uuid,
         priority: message.priority,
       })
