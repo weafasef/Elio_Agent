@@ -177,51 +177,125 @@ heartbeatService → MainLoop.step()
 
 ---
 
-# 四、将来计划
+# 四、TTS 语音合成
 
-## 4.1 下一步（优先级排序）
+## 4.1 架构
 
-1. **TTS 引入** — Elio 能"说话"，时间片回复以语音输出，不再只是终端文字
-2. **视觉信息导入** — 摄像头/屏幕截图作为感知源，进入 WorldviewBuffer
-3. **Live2D** — 前端形象，配合 TTS 实现表情+口型同步
+```
+Elio 输出 → MainLoop 解析 <ja>/<zh> 块 → ttsService.synthesize()
+                                              │
+                                    GPT-SoVITS api_v2.py (port 9880)
+                                              │
+                                    ~/.elio/audio/elio_{ts}_{emotion}.wav
+                                              │
+                                    sendToSession('elio', { subtype: 'tts_ready' })
+                                              │
+                               ┌──────────────┴──────────────┐
+                               ▼                              ▼
+                        终端客户端 (client.ts)          浏览器客户端 (client.html)
+                        PowerShell播放                <audio> 播放
+```
 
-## 4.2 里 Agent 搜索指令
+**引擎**: [GPT-SoVITS](https://github.com/RunciLiu/GPT-SoVITS) v2ProPlus, 花火 (Hanabi) 音色, CUDA 推理
 
-表 Agent 在对话中可引导里 Agent 搜索特定记忆方向（"帮我回忆一下上次跟产品吵架是什么时候"→ 里 Agent 针对性检索）。
+**启动**: `runtime\python.exe api_v2.py -a 127.0.0.1 -p 9880`
 
-## 4.3 人格系统演进
+**参考音频**: 5 种情绪 (开心/难过/吃惊/恐惧/厌恶), 启动时自动扫描 `D:\VS_python\TTS\花火\v2ProPlus\花火\reference_audios\日语\emotions\`
 
-Slow Path 情绪分析驱动人格自调整，取代 `[TRAIT_ADJUST]` 文件标记。
+**合成速度**: 短句 ~1s, 长句 3-7s
 
-## 4.4 稳定性
+## 4.2 输出格式
 
-- CLI 子进程崩溃后自动重启并恢复上下文
-- 记忆目录定期备份
-- 里 Agent 健康检查（Slow Path 队列积压告警）
+Elio 用 `<ja>...</ja><zh>...</zh>` 双语块输出:
+- `<ja>` → TTS 语音合成 (日语)
+- `<zh>` → 中文字幕
 
-## 4.5 世界观增强
+`parseSpeechBlocks()` 三级降级: 双块 → 仅ja块 → 全文检测日文字符兜底
 
-加入系统状态（CPU、内存）、master活动检测（键盘/鼠标空闲时间）。
+## 4.3 客户端
+
+| 客户端 | 文件 | 用途 |
+|--------|------|------|
+| 终端 | `client.ts` | `bun client.ts` 启动, WebSocket + PowerShell 播放 |
+| 网页 | `client.html` | 浏览器 `http://127.0.0.1:3456/`, WebSocket + `<audio>` |
+
+终端比网页简单——无 CORS, 无跨域, 直接读文件播放。
+
+## 4.4 心跳 ↔ TTS 矛盾
+
+**问题**: 心跳每 30s 打断 Elio, 新 tick 导致新输出 → 新 TTS。如果长文本合成需 7s, 连续两次 tick 的语音会重叠。
+
+**当前状态**:
+- TTS 无去重——两次连续的 `assistant` 输出触发两次 `synthesize()`, 后到的音频覆盖前一个的文件名
+- 音频播放顺序通过 `tts_ready` WebSocket 通知 + 客户端队列保证, 但合成时长不可控
+
+**待处理**: 加 AbortController 取消旧合成、播放端排队等。见 ttsService.ts。
 
 ---
 
-# 五、完成情况
+# 五、提示词优化
+
+## 5.1 待处理
+
+1. **`<ja>/<zh>` 格式不够强制** — Elio 偶尔忘记用格式块, 依赖兜底逻辑。需要更强调 `CRITICAL: No blocks = no voice`
+2. **中文 OS / 日语输出矛盾** — 系统提示词有大量中文, env_info 也显示中文 OS。Elio 偶尔被带偏说中文。考虑动态段用日语重写
+3. **人格模式说中文** — `buildPersonalityTag()` 注入的模式名是英文 (`cute obedient`), 改为日语标签可能更有沉浸感
+
+## 5.2 已完成
+
+- `src/constants/prompts.ts`: 「Language — CRITICAL」日语段, 输出格式 MANDATORY
+- `src/elio/personality/prompts.ts`: 四种模式 + 框架说明全部日语化
+- 主人 → マスター, 禁用「あなた」
+
+---
+
+# 六、将来计划
+
+## 6.1 下一步 (优先级排序)
+
+1. **TTS 去重与播放优化** — AbortController 取消旧合成, 播放端队列完善
+2. **视觉信息导入** — 摄像头/屏幕截图作为感知源, 进入 WorldviewBuffer
+3. **Live2D** — 前端形象, 配合 TTS 实现表情+口型同步
+
+## 6.2 里 Agent 搜索指令
+
+表 Agent 在对话中可引导里 Agent 搜索特定记忆方向。
+
+## 6.3 人格系统演进
+
+Slow Path 情绪分析驱动人格自调整, 取代 `[TRAIT_ADJUST]` 文件标记。
+
+## 6.4 稳定性
+
+- CLI 子进程崩溃后自动重启并恢复上下文
+- 记忆目录定期备份
+- 里 Agent 健康检查 (Slow Path 队列积压告警)
+
+## 6.5 世界观增强
+
+加入系统状态 (CPU、内存)、master活动检测 (键盘/鼠标空闲时间)。
+
+---
+
+# 七、完成情况
 
 | 轮次 | 内容 | commits |
 |------|------|---------|
-| 第 1 轮：旧系统清理 | 删 ~8 文件，修改 ~15 文件 | `a7b3459` |
-| 第 2 轮：裁剪入口 | 删 ~160 文件 (含 desktop/)，修改 ~30 文件 | `0f56f24` |
-| 第 2.5 轮：bridge 根除 | 删 17 文件，修改 ~20 文件，搬迁 3 工具 | `63e892c`→`9e602de` |
-| 第 3.0 轮：世界观消息层重构 | 删 worldview.ts，改 prompts.ts/print.ts/heartbeatService.ts | 待提交 |
-| 第 3.1 轮：WorldviewBuffer | 新建 WorldviewBuffer.ts，改 handler.ts | `0223b4a` |
-| 第 3.2-3.4 轮：主循环+时间片 | 新建 MainLoop.ts，heartbeatService 271→27行，时间片模型 | `a3bca78` |
-| **已完成** | **~186 文件删除，~69 文件修改** | **10 commits** |
+| 第 1 轮: 旧系统清理 | 删 ~8 文件, 修改 ~15 文件 | `a7b3459` |
+| 第 2 轮: 裁剪入口 | 删 ~160 文件 (含 desktop/), 修改 ~30 文件 | `0f56f24` |
+| 第 2.5 轮: bridge 根除 | 删 17 文件, 修改 ~20 文件, 搬迁 3 工具 | `63e892c`→`9e602de` |
+| 第 3.0 轮: 世界观消息层重构 | 删 worldview.ts, 改 prompts.ts/print.ts/heartbeatService.ts | 待提交 |
+| 第 3.1 轮: WorldviewBuffer | 新建 WorldviewBuffer.ts, 改 handler.ts | `0223b4a` |
+| 第 3.2-3.4 轮: 主循环+时间片 | 新建 MainLoop.ts, heartbeatService 271→27行 | `a3bca78` |
+| 第 4 轮: 日语化+TTS | 日语提示词, GPT-SoVITS集成, `<ja>/<zh>`格式, 30s心跳 | `3606e09` |
+| 第 4.1 轮: 客户端 | client.ts/client.html, /audio/端点, tts_ready通知 | `b7c2da2`→`8d20ca9` |
+| **已完成** | **~186 文件删除, ~69 文件修改** | **17 commits** |
 
 ## 执行原则
 
 1. **逐轮推进** — 一轮完成并推送后再开始下一轮
 2. **每轮验证** — Server 启动 + 无回归
-3. **端口轮换** — 验证时换新端口，避免残留进程误判
+3. **端口轮换** — 验证时换新端口, 避免残留进程误判
 
 ---
 
