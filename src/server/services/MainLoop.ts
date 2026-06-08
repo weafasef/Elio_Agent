@@ -21,6 +21,7 @@ import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
 import { WorldviewBuffer } from '../../elio/WorldviewBuffer.js'
 import { synthesize, getEmotionForMode, isAvailable } from './ttsService.js'
 import type { SubtitleData } from './ttsService.js'
+import { sendToSession } from '../ws/handler.js'
 
 const SESSION_ID = 'elio'
 const WORK_TIMEOUT_MS = 120_000
@@ -277,12 +278,23 @@ function onOutput(msg: any): void {
         if (modeMatch) currentPersonalityMode = modeMatch[1]
 
         const emotion = getEmotionForMode(currentPersonalityMode)
-        // Fire-and-forget: don't block the main loop
         synthesize(speech.ja, speech.zh, emotion).then(result => {
           if (result) {
             console.log(
               `[MainLoop] TTS: ${result.audioPath} | subtitle: ${truncate(result.subtitle.zh, 40)}`,
             )
+            // Notify connected clients so they can play the right audio
+            const filename = result.audioPath.replace(/\\/g, '/').split('/').pop() || ''
+            sendToSession(SESSION_ID, {
+              type: 'system_notification',
+              subtype: 'tts_ready',
+              data: {
+                audioUrl: `/audio/${filename}`,
+                audioFile: filename,
+                ja: result.subtitle.ja,
+                zh: result.subtitle.zh,
+              },
+            })
           }
         })
       }

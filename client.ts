@@ -6,15 +6,15 @@
  */
 
 import { createInterface } from 'node:readline'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
+import { Buffer } from 'node:buffer'
 
 // ── Config ──────────────────────────────────────────────────────────────
 
 const WS_URL = 'ws://127.0.0.1:3456/ws/elio'
-const AUDIO_DIR = join(homedir(), '.elio', 'audio')
 
 // ── Colors ──────────────────────────────────────────────────────────────
 
@@ -30,57 +30,34 @@ const C = {
 
 // ── Audio playback ──────────────────────────────────────────────────────
 
-let lastPlayedFile: string | null = null
-let audioPollTimer: ReturnType<typeof setInterval> | null = null
+let audioQueue: Array<{ url: string; zh: string }> = []
+let audioPlaying = false
 
-function playAudio(filePath: string): void {
-  // Windows: use PowerShell to play wav
+function playAudioFile(url: string): void {
+  const base = WS_URL.replace('/ws/elio', '')
+  const fullUrl = base + url
   if (process.platform === 'win32') {
-    spawn('powershell', [
-      '-c',
-      `(New-Object Media.SoundPlayer '${filePath}').PlaySync()`,
-    ], { stdio: 'ignore' }).on('error', () => {})
+    // Fetch and save to temp, then play
+    fetch(fullUrl).then(r => r.arrayBuffer()).then(buf => {
+      const tmp = join(homedir(), '.elio', 'audio', '_playback.wav')
+      writeFileSync(tmp, Buffer.from(buf))
+      spawn('powershell', [
+        '-c',
+        `(New-Object Media.SoundPlayer '${tmp}').PlaySync()`,
+      ], { stdio: 'ignore' }).on('exit', () => playNextInQueue())
+    }).catch(() => playNextInQueue())
   } else {
-    spawn('ffplay', ['-nodisp', '-autoexit', filePath], { stdio: 'ignore' })
-      .on('error', () => {})
+    spawn('ffplay', ['-nodisp', '-autoexit', fullUrl], { stdio: 'ignore' })
+      .on('exit', () => playNextInQueue())
   }
 }
 
-function findLatestAudio(): string | null {
-  if (!existsSync(AUDIO_DIR)) return null
-  const files = readdirSync(AUDIO_DIR).filter((f: string) => f.endsWith('.wav'))
-  if (files.length === 0) return null
-
-  let newest = files[0]
-  let newestMtime = 0
-  for (const f of files) {
-    try {
-      const mtime = statSync(join(AUDIO_DIR, f)).mtimeMs
-      if (mtime > newestMtime) { newestMtime = mtime; newest = f }
-    } catch {}
-  }
-  return join(AUDIO_DIR, newest)
-}
-
-function pollAndPlayAudio(): void {
-  const latest = findLatestAudio()
-  if (latest && latest !== lastPlayedFile) {
-    lastPlayedFile = latest
-    console.log(C.dim + `\n🔊 播放中...` + C.reset)
-    playAudio(latest)
-
-    // Try to read subtitle
-    const subFile = latest.replace(/\.wav$/, '.subtitle.json')
-    if (existsSync(subFile)) {
-      try {
-        const sub = JSON.parse(readFileSync(subFile, 'utf-8'))
-        if (sub.zh) {
-          console.log(C.dim + `📝 字幕: ${sub.zh}` + C.reset)
-        }
-      } catch {}
-    }
-    console.log() // newline after playback
-  }
+function playNextInQueue(): void {
+  audioPlaying = false
+  if (audioQueue.length === 0) return
+  const next = audioQueue.shift()!
+  audioPlaying = true
+  playAudioFile(next.url)
 }
 
 // ── Parse speech blocks ─────────────────────────────────────────────────
@@ -149,13 +126,29 @@ function connect(): void {
               process.stdout.write(`\n${C.dim}📝 ${speech.zh}${C.reset}`)
             }
             process.stdout.write('\n')
-            setTimeout(pollAndPlayAudio, 600)
+            // Audio will arrive via system_notification/tts_ready
           } else if (!elioBuffer.includes('[调用工具') && !elioBuffer.includes('<personality-mode')) {
             process.stdout.write(`\n${C.cyan}Elio${C.reset}: ${elioBuffer}\n`)
           }
         }
         elioBuffer = ''
         promptLine()
+        break
+
+      case 'system_notification':
+        if (msg.subtype === 'tts_ready' && msg.data) {
+          const { audioUrl, zh } = msg.data
+          console.log(C.dim + `\n🔊 播放中...` + C.reset)
+          if (zh) console.log(C.dim + `📝 ${zh}` + C.reset)
+          console.log()
+          // Queue or play immediately
+          if (audioPlaying) {
+            audioQueue.push({ url: audioUrl, zh })
+          } else {
+            audioPlaying = true
+            playAudioFile(audioUrl)
+          }
+        }
         break
 
       case 'error':
