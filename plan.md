@@ -178,22 +178,31 @@ export function getCurrentPersonalityMode() {
 
 ## 1.4 世界观注入
 
-> 🌐 世界观提示词原文及新增的 "Understanding the conversation" 段见 [prompts.md](prompts.md) 2.1 节和 3.3 节。
+> 🌐 世界观提示词原文及 "Understanding the conversation — the time-slice clock" 段见 [prompts.md](prompts.md) 2.1 节和 3.3 节。
 
 世界观不再通过 system prompt 动态段注入（`elio_worldview` 段已删除，`src/elio/worldview.ts` 已删除），而是作为 **user message 直接进入对话历史**。
+
+### 时间片模型
+
+**核心原则**：每 tick 无条件发 worldview。如果 Elio 正在处理，先 interrupt（仅停 LLM 推理，工具继续跑）。Elio 看到最新世界状态后自己决定继续还是切换。
 
 ### 完整链路
 
 ```
-心跳 (heartbeatService.ts) 每 10s
+heartbeatService (定时器壳) 每 10s
   │
-  ├─ buildWorldview() → "<worldview>\n当前时间: 15:30（下午）\n已持续运行: 45 分钟\n...</worldview>"
-  │   包含: 时间 + 运行时长 + 外部事件(WorldviewBuffer.drain) + 上轮输出(lastElioOutput)
-  │
-  ├─ conversationService.sendWorldview(SESSION_ID, worldview)
-  │     └─ sendSdkMessage({ type: 'worldview', worldview })
-  │
-  ▼
+  └─ MainLoop.step()
+       │
+       ├─ if processing → sendInterrupt (仅停LLM，工具block继续跑)
+       │     └─ expectStaleResult=true (旧turn的result到来自动吞掉)
+       │
+       ├─ buildWorldview() → "<worldview>\n当前时间: 15:30（下午）\n已持续运行: 45 分钟\n...</worldview>"
+       │   包含: 时间 + 运行时长 + 外部事件(WorldviewBuffer.drain) + 上轮输出(lastElioOutput)
+       │
+       ├─ conversationService.sendWorldview(SESSION_ID, worldview)
+       │     └─ sendSdkMessage({ type: 'worldview', worldview })
+       │
+       ▼
 SDK WebSocket → CLI 子进程 (print.ts)
   │
   ├─ message.type === 'worldview' →
@@ -228,16 +237,17 @@ messages:
 | 存储 | `worldview.ts` 模块变量 | 心跳直接生成文本 |
 | 触发回合 | `enqueue('')` 空串 | `enqueue(worldviewText)` 有内容 |
 | 累积 | 每轮覆盖，无历史 | 对话历史中自然累积 |
-| Elio 获知方式 | "对周围世界的感知" | 系统提示词告知 `<worldview>` 含义 |
+| Elio 获知方式 | "对周围世界的感知" | "Understanding the conversation — the time-slice clock" 段告知 |
 
 ### 文件改动记录（含本次改造）
 
 | 文件 | 改动 |
 |------|------|
 | `src/elio/worldview.ts` | **删除**。世界观不再走 system prompt |
-| `src/constants/prompts.ts` | 删 `elio_worldview` 动态段 + `getWorldview` import；新增 "Understanding the conversation" 段 |
+| `src/constants/prompts.ts` | 删 `elio_worldview` 动态段 + `getWorldview` import；新增 "Understanding the conversation — the time-slice clock" 段 |
 | `src/cli/print.ts` | 删 `setWorldview/setLastUserMessage`；世界观 `value` 从 `''` 改为 worldview 文本 |
-| `src/server/services/heartbeatService.ts` | `buildWorldview` 包裹 `<worldview>` 标签 + 捕获 Elio 上轮输出 (`lastElioOutput`) |
+| `src/server/services/heartbeatService.ts` | 纯定时器壳，定时触发 `MainLoop.step()` (271→27行) |
+| `src/server/services/MainLoop.ts` | **新建**。时间片循环：无条件 tick + interrupt(仅LLM) + stale result 吸收 + 会话管理 |
 | `src/server/services/conversationService.ts` | `sendWorldview()` 方法（前期已有） |
 
 ---
@@ -968,10 +978,9 @@ LLM 流式输出:
 - ✅ `src/memdir/` 全部存根化（memdir.ts → `loadMemoryPrompt()` 返回 null，teamMemPaths.ts → `isTeamMemoryEnabled()` 返回 false，等）
 - ✅ 表 Agent 提示词精简：旧记忆指南截切到[附录 A](#附录-a已截切的旧记忆操作指南)
 
-### 第 5 步：向量检索增强（后续）
-- 为事件节点添加 embedding 字段
-- Fast Path 的锚点搜索从纯关键词升级为关键词 + 向量混合
-- 语义维的 SIMILAR_TO 边初始化可基于 embedding 相似度自动生成
+### 第 5 步：表agent指导李agent搜索记忆（后续）
+
+
 
 ## 4.2 心跳与世界观增强
 
@@ -1428,11 +1437,11 @@ WORK_TIMEOUT_MS = 120_000
 
 #### 3.1.7 后续子轮（主循环重构后续）
 
-| 子轮 | 内容 |
-|------|------|
-| 3.2 | `lastOutput` — Elio 上轮输出注入下一轮上下文，知道自己"刚才在做什么" |
-| 3.3 | `MainLoop` 重构 — 把 tick 逻辑从 heartbeatService 抽到独立模块 |
-| 3.4 | busy 锁→状态机 — 支持 Elio 在处理时也能累积输入，而不是跳过整轮 |
+| 子轮 | 内容 | 状态 |
+|------|------|------|
+| 3.2 | `lastOutput` — Elio 上轮输出注入下一轮上下文，知道自己"刚才在做什么" | ✅ |
+| 3.3 | `MainLoop` 重构 — tick 逻辑从 heartbeatService 抽到独立模块 | ✅ |
+| 3.4 | 时间片模型 — 每 tick 无条件发 worldview，interrupt 只停 LLM 不停工具 | ✅ |
 
 ---
 
@@ -1447,9 +1456,11 @@ WORK_TIMEOUT_MS = 120_000
 | 第 1 轮：旧系统清理 | 0 | ~8 文件 | ~15 文件 | `a7b3459` |
 | 第 2 轮：裁剪入口 | 0 | ~160 文件 (含 desktop/) | ~30 文件 | `0f56f24` |
 | 第 2.5 轮：bridge 根除 | 3 utils 文件 | 17 文件 | ~20 文件 | `63e892c`→`9e602de` (5 个) |
-| 第 3.0 轮：世界观消息层重构 | 0 | 1 (`worldview.ts`) | 4 (`prompts.ts`, `print.ts`, `heartbeatService.ts`, `plan.md`) | 待提交 |
-| ⏳ 第 3.1 轮：WorldviewBuffer（已完成） | `WorldviewBuffer.ts` | 0 | `handler.ts`, `heartbeatService.ts` | `0223b4a` |
-| ⏳ 第 3.2-3.4 轮：主循环重构 | `InputBuffer.ts`, `MainLoop.ts` | 0 | `server/index.ts` 等 |
+| 第 3.0 轮：世界观消息层重构 | 0 | 1 (`worldview.ts`) | 5 (`prompts.ts`, `print.ts`, `heartbeatService.ts`, `plan.md`) | 待提交 |
+| ✅ 第 3.1 轮：WorldviewBuffer | `WorldviewBuffer.ts` | 0 | `handler.ts`, `heartbeatService.ts` | `0223b4a` |
+| ✅ 第 3.2 轮：lastElioOutput | 0 | 0 | `heartbeatService.ts` | 随 3.0 完成 |
+| ✅ 第 3.3 轮：MainLoop 提取 | `MainLoop.ts` | 0 | `heartbeatService.ts` (271→27行) | 待提交 |
+| ✅ 第 3.4 轮：时间片模型 | 0 | 0 | `MainLoop.ts`, `prompts.ts` | 待提交 |
 | ⏳ 第 4 轮：碎片化 | 0 | 0 | prompt + 工具调度 |
 | **已完成** | **4** | **~186** | **~69** | **9 个 commits** |
 
