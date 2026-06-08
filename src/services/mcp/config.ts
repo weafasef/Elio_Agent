@@ -1523,7 +1523,7 @@ const DEFAULT_DISABLED_BUILTIN = (
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 function isDefaultDisabledBuiltin(_name: string): boolean {
-  return false // Computer Use 默认启用，无需用户手动 enable
+  return true // Computer Use disabled — Elio doesn't need desktop control tools
 }
 
 /**

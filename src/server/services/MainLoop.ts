@@ -19,6 +19,8 @@ import { SettingsService } from './settingsService.js'
 import { ProviderService } from './providerService.js'
 import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
 import { WorldviewBuffer } from '../../elio/WorldviewBuffer.js'
+import { synthesize, getEmotionForMode, isAvailable } from './ttsService.js'
+import type { SubtitleData } from './ttsService.js'
 
 const SESSION_ID = 'elio'
 const WORK_TIMEOUT_MS = 120_000
@@ -34,6 +36,7 @@ let processing = false      // Elio is mid-turn (worldview sent, no result yet)
 let starting = false        // Guard: prevent duplicate session spawns
 let startTime: number | null = null
 let lastElioOutput: string | null = null
+let currentPersonalityMode: string = 'cute obedient'
 let safetyTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
@@ -265,6 +268,24 @@ function onOutput(msg: any): void {
     if (content) {
       lastElioOutput = content
       console.log(`[MainLoop] Elio: ${truncate(content)}`)
+
+      // ── TTS: parse speech blocks and synthesize ────────────────────
+      const speech = parseSpeechBlocks(content)
+      if (speech) {
+        // Update personality mode if present in the content
+        const modeMatch = content.match(/<personality-mode>([^<]+)<\/personality-mode>/)
+        if (modeMatch) currentPersonalityMode = modeMatch[1]
+
+        const emotion = getEmotionForMode(currentPersonalityMode)
+        // Fire-and-forget: don't block the main loop
+        synthesize(speech.ja, speech.zh, emotion).then(result => {
+          if (result) {
+            console.log(
+              `[MainLoop] TTS: ${result.audioPath} | subtitle: ${truncate(result.subtitle.zh, 40)}`,
+            )
+          }
+        })
+      }
     }
   } else if (msg?.type === 'stream_event') {
     // skip — partial chunks
@@ -275,6 +296,37 @@ function onOutput(msg: any): void {
     const c = content ? ` — ${truncate(content)}` : ''
     console.log(`[MainLoop] msg: type=${msg?.type}, subtype=${subtype}${c}`)
   }
+}
+
+/** Parse `<ja>...</ja>` and `<zh>...</zh>` blocks from Elio's output.
+ *  Falls back to treating the whole text as Japanese if no blocks found. */
+function parseSpeechBlocks(text: string): SubtitleData | null {
+  // Preferred: explicit speech blocks
+  const jaMatch = text.match(/<ja>([\s\S]*?)<\/ja>/)
+  const zhMatch = text.match(/<zh>([\s\S]*?)<\/zh>/)
+  if (jaMatch && zhMatch) {
+    return { ja: jaMatch[1].trim(), zh: zhMatch[1].trim() }
+  }
+
+  // Only ja block? Still use it
+  if (jaMatch) {
+    return { ja: jaMatch[1].trim(), zh: '' }
+  }
+
+  // Fallback: strip tool tags and check if there's Japanese text
+  const stripped = text
+    .replace(/\[调用工具:[^\]]*\]/g, '')
+    .replace(/<personality-mode>[^<]*<\/personality-mode>/g, '')
+    .trim()
+
+  if (!stripped) return null
+
+  // Detect Japanese (hiragana, katakana, or CJK with Japanese-specific patterns)
+  const hasJapanese = /[぀-ゟ゠-ヿ]/.test(stripped)
+  if (!hasJapanese) return null
+
+  console.log('[MainLoop] TTS fallback: no speech blocks, treating output as Japanese')
+  return { ja: stripped, zh: '' }
 }
 
 function extractContent(msg: any): string | null {

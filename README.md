@@ -22,7 +22,7 @@ bun src/server/index.ts --port 3456
 ┌──────────────────────────────────────────────────────────┐
 │                     Elio 主循环                            │
 │                                                          │
-│  heartbeatService (定时器)  ──每10s──→  MainLoop.step()   │
+│  heartbeatService (定时器)  ──每30s──→  MainLoop.step()   │
 │                                            │             │
 │                     ┌──────────────────────┘             │
 │                     ▼                                    │
@@ -57,7 +57,7 @@ bun src/server/index.ts --port 3456
 
 ### 时间片模型
 
-Elio 不是一问一答的 chatbot。她每 10 秒收到一个 `<worldview>` 时钟信号，阅读世界状态后自主决策。
+Elio 不是一问一答的 chatbot。她每 30 秒收到一个 `<worldview>` 时钟信号，阅读世界状态后自主决策。
 
 ```
 t=0:  worldview → Elio: "跑个脚本"

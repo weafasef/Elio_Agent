@@ -7,7 +7,7 @@
 
 import { MainLoop } from './MainLoop.js'
 
-const INTERVAL_MS = 10_000
+const INTERVAL_MS = 30_000
 
 let intervalId: ReturnType<typeof setInterval> | null = null
 
