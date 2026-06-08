@@ -127,6 +127,7 @@ export class ConversationStartupError extends Error {
 export class ConversationService {
   private sessions = new Map<string, SessionProcess>()
   private deletedSessions = new Set<string>()
+  private pendingCallbacks = new Map<string, Array<(msg: any) => void>>()
   private providerService = new ProviderService()
 
   private buildSessionCliArgs(
@@ -317,6 +318,15 @@ export class ConversationService {
     }
     this.sessions.set(sessionId, session)
 
+    // Replay any callbacks that were registered before the session existed
+    const queued = this.pendingCallbacks.get(sessionId)
+    if (queued) {
+      this.pendingCallbacks.delete(sessionId)
+      for (const cb of queued) {
+        session.outputCallbacks.push(cb)
+      }
+    }
+
     session.outputDrain = Promise.all([
       this.readProcessOutputStream(sessionId, proc.stdout, 'stdout'),
       this.readProcessOutputStream(sessionId, proc.stderr, 'stderr'),
@@ -388,6 +398,12 @@ export class ConversationService {
     const session = this.sessions.get(sessionId)
     if (session) {
       session.outputCallbacks.push(callback)
+    } else {
+      // Session not started yet — queue callback for replay
+      if (!this.pendingCallbacks.has(sessionId)) {
+        this.pendingCallbacks.set(sessionId, [])
+      }
+      this.pendingCallbacks.get(sessionId)!.push(callback)
     }
   }
 
@@ -753,6 +769,7 @@ export class ConversationService {
     if (!session) return
 
     this.sessions.delete(sessionId)
+    this.pendingCallbacks.delete(sessionId)
     this.killProcess(sessionId, session)
   }
 

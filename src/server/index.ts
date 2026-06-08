@@ -405,6 +405,65 @@ export function startServer(port = PORT, host = HOST) {
           }
         }
 
+        // Audio files — serve TTS output for the chat client
+        if (url.pathname.startsWith('/audio/')) {
+          const { readFileSync, existsSync, readdirSync, statSync } = await import('node:fs')
+          const { join } = await import('node:path')
+          const { homedir } = await import('node:os')
+          const audioDir = join(homedir(), '.elio', 'audio')
+
+          // /audio/last — return newest audio + subtitle
+          if (url.pathname === '/audio/last') {
+            if (!existsSync(audioDir)) {
+              return Response.json({ error: 'no audio yet' }, { status: 404, headers: cors.headers })
+            }
+            const files = readdirSync(audioDir).filter(f => f.endsWith('.wav'))
+            if (files.length === 0) {
+              return Response.json({ error: 'no audio yet' }, { status: 404, headers: cors.headers })
+            }
+            // Find newest .wav by mtime
+            let newest = files[0]
+            let newestMtime = 0
+            for (const f of files) {
+              const stat = existsSync(join(audioDir, f)) ? statSync(join(audioDir, f)) : null
+              const mtime = stat?.mtimeMs ?? 0
+              if (mtime > newestMtime) { newestMtime = mtime; newest = f }
+            }
+            const base = newest.replace(/\.wav$/, '')
+            const subFile = `${base}.subtitle.json`
+            let subtitle = null
+            if (existsSync(join(audioDir, subFile))) {
+              try {
+                subtitle = JSON.parse(readFileSync(join(audioDir, subFile), 'utf-8'))
+              } catch {}
+            }
+            return Response.json({
+              audio: `/audio/${newest}`,
+              audioFile: newest,
+              subtitle,
+            }, { headers: cors.headers })
+          }
+
+          const file = url.pathname.replace(/^\/audio\//, '')
+          const filePath = join(audioDir, file)
+          if (!existsSync(filePath)) {
+            return new Response('Not Found', { status: 404 })
+          }
+          const buf = readFileSync(filePath)
+          const mime = file.endsWith('.wav') ? 'audio/wav'
+            : file.endsWith('.json') ? 'application/json'
+            : 'application/octet-stream'
+          return new Response(buf, { headers: { 'Content-Type': mime, ...cors.headers } })
+        }
+
+        // Client webpage — serve Elio chat client
+        if (url.pathname === '/' || url.pathname === '/client') {
+          const { readFileSync } = await import('node:fs')
+          const { join } = await import('node:path')
+          const html = readFileSync(join(import.meta.dirname, '..', '..', 'client.html'), 'utf-8')
+          return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', ...cors.headers } })
+        }
+
         // Health check
         if (url.pathname === '/health') {
           if (cors.rejected) {

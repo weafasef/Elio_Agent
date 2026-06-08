@@ -1961,8 +1961,6 @@ function bindClientSessionOutput(
     shouldForward?: (cliMsg: any) => boolean
   },
 ) {
-  if (!conversationService.hasSession(sessionId)) return
-
   removeClientOutputCallback(ws)
 
   const callback = (cliMsg: any) => {
