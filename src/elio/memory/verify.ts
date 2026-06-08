@@ -62,7 +62,7 @@ async function main() {
     assert(e2b === null, 'Duplicate worldview skipped')
 
     // Simulate Elio response
-    const e3 = agent.captureElioResponse('好的主人，我来帮你整理Python的学习笔记')
+    const e3 = agent.captureElioResponse('好的 master，我来帮你整理Python的学习笔记')
     assert(e3.startsWith('E'), `Elio response captured: ${e3}`)
     assert(agent.getStats().eventCount === 3, 'Event count → 3')
 
@@ -74,7 +74,7 @@ async function main() {
     assert(graph.edgeCount >= 2, `Has ≥2 temporal edges: ${graph.edgeCount}`)
 
     const e1Node = graph.getEvent(e1)!
-    assert(e1Node.speaker === '主人', 'Speaker set correctly')
+    assert(e1Node.speaker === 'master', 'Speaker set correctly')
     assert(e1Node.rawText === '我今天学了Python编程', 'Raw text preserved')
 
     const tempEdges = graph.getOutgoingEdges(e1, 'TEMPORAL')

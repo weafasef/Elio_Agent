@@ -131,7 +131,7 @@ export class MemoryAgent {
   /** Capture a user message as a memory event. */
   captureUserMessage(text: string): string {
     const { eventId, durationMs } = this.fastPath.process({
-      speaker: '主人',
+      speaker: 'master',
       text,
     })
     this.slowPath.enqueue(eventId)

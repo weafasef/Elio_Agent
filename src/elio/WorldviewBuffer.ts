@@ -9,7 +9,7 @@
 
 export type Percept = {
   type: 'user_message'        // 未来扩展: 'image', 'other_message', 'system_event'
-  speaker: string              // '主人' | 未来其他人名
+  speaker: string              // 'master' | 未来其他人名
   text: string
   timestamp: Date
 }

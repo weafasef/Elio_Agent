@@ -4,7 +4,7 @@ export interface EventNode {
   id: string
   timestamp: number
   rawText: string
-  speaker: '主人' | 'Elio' | 'system'
+  speaker: 'master' | 'Elio' | 'system'
   narrative: string | null
   entities: string[]
   emotion: Record<string, number> | null

@@ -59,22 +59,22 @@ function dimBadge(label: string, color: string): string {
 // ── Scenario ────────────────────────────────────────────────────────────────
 
 interface ScenarioStep {
-  speaker: '主人' | 'Elio' | 'system'
+  speaker: 'master' | 'Elio' | 'system'
   text: string
   pause?: number // extra pause after this step (ms)
 }
 
 const SCENARIO: ScenarioStep[] = [
   {
-    speaker: '主人',
+    speaker: 'master',
     text: 'Elio，我今天开始学 Python 了，从最基础的变量和循环开始。',
   },
   {
     speaker: 'Elio',
-    text: '太好了主人！Python 是很好的入门语言。变量就像贴了标签的盒子，循环就像重复做一件事。需要我帮你做什么练习吗？',
+    text: '太好了 master！Python 是很好的入门语言。变量就像贴了标签的盒子，循环就像重复做一件事。需要我帮你做什么练习吗？',
   },
   {
-    speaker: '主人',
+    speaker: 'master',
     text: '帮我整理一下今天学的知识点：变量赋值、if 判断、for 循环、while 循环。',
     pause: 300,
   },
@@ -88,7 +88,7 @@ const SCENARIO: ScenarioStep[] = [
     pause: 500,
   },
   {
-    speaker: '主人',
+    speaker: 'master',
     text: 'for 循环和 while 循环有什么区别？我搞混了。',
   },
   {
@@ -101,7 +101,7 @@ const SCENARIO: ScenarioStep[] = [
 // ── Visualizers ─────────────────────────────────────────────────────────────
 
 function showEvent(event: { id: string; speaker: string; rawText: string; timestamp: number }): void {
-  const speakerColor = event.speaker === '主人' ? C.yellow :
+  const speakerColor = event.speaker === 'master' ? C.yellow :
     event.speaker === 'Elio' ? C.cyan :
     C.dim
   const line = event.rawText.length > 80
@@ -179,7 +179,7 @@ let stepNum = 0
 
 async function processStep(agent: MemoryAgent, step: ScenarioStep): Promise<void> {
   stepNum++
-  const speakerColor = step.speaker === '主人' ? C.yellow :
+  const speakerColor = step.speaker === 'master' ? C.yellow :
     step.speaker === 'Elio' ? C.cyan :
     C.dim
 
@@ -190,7 +190,7 @@ async function processStep(agent: MemoryAgent, step: ScenarioStep): Promise<void
   console.log('█'.repeat(60))
 
   // Feed to memory
-  if (step.speaker === '主人') {
+  if (step.speaker === 'master') {
     agent.captureUserMessage(step.text)
   } else if (step.speaker === 'Elio') {
     agent.captureElioResponse(step.text)

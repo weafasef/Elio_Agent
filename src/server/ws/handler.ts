@@ -310,7 +310,7 @@ async function handleUserMessage(
   console.log(`[WS] User message → WorldviewBuffer: "${text.slice(0, 100)}"`)
   WorldviewBuffer.push({
     type: 'user_message',
-    speaker: '主人',
+    speaker: 'master',
     text,
     timestamp: new Date(),
   })

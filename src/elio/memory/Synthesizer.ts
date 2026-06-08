@@ -45,7 +45,7 @@ export function synthesize(
     const e = shown[i]
     const timeLabel = relativeTime(e.timestamp, now)
     const dateLabel = formatDate(e.timestamp)
-    const speaker = e.speaker === '主人' ? '主人' : e.speaker === 'Elio' ? 'Elio' : ''
+    const speaker = e.speaker === 'master' ? 'master' : e.speaker === 'Elio' ? 'Elio' : ''
 
     // Use Slow Path narrative if available, else raw text (truncated)
     const text = e.narrative ?? truncate(e.rawText, 120)

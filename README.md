@@ -61,7 +61,7 @@ Elio 不是一问一答的 chatbot。她每 10 秒收到一个 `<worldview>` 时
 
 ```
 t=0:  worldview → Elio: "跑个脚本"
-t=10: interrupt (仅停LLM，工具继续) → worldview: "主人说话了 + 脚本还在跑"
+t=10: interrupt (仅停LLM，工具继续) → worldview: "master spoke + 脚本还在跑"
       → Elio 自己判断: 继续等结果还是先回复
 t=15: tool_result 到达
 t=20: worldview → Elio 看到完整结果 → 决策
@@ -79,8 +79,8 @@ t=20: worldview → Elio 看到完整结果 → 决策
 messages:
   user: <worldview>当前时间 15:30 下午  无外部事件  你上轮: 整理记忆</worldview>
   assistant: 继续整理了 3 条记忆...
-  user: <worldview>当前时间 15:30:10  主人说: "帮我看看这个"  你上轮: 整理记忆</worldview>
-  assistant: 好的主人...
+  user: <worldview>当前时间 15:30:10  master says: "帮我看看这个"  你上轮: 整理记忆</worldview>
+  assistant: 好的master...
 ```
 
 详见 [prompts.md](prompts.md) 3.3 节。
