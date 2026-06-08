@@ -460,7 +460,7 @@ export function startServer(port = PORT, host = HOST) {
         if (url.pathname === '/' || url.pathname === '/client') {
           const { readFileSync } = await import('node:fs')
           const { join } = await import('node:path')
-          const html = readFileSync(join(import.meta.dirname, '..', '..', 'client.html'), 'utf-8')
+          const html = readFileSync(join(import.meta.dir, '..', '..', 'client.html'), 'utf-8')
           return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', ...cors.headers } })
         }
 
