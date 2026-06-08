@@ -255,6 +255,9 @@ export const handleWebSocket = {
 
     computerUseApprovalService.cancelSession(sessionId)
 
+    // Elio session is heartbeat-driven — never kill it on client disconnect
+    if (sessionId === 'elio') return
+
     // Schedule delayed cleanup. Sessions waiting on user input need a longer
     // grace period so transient renderer disconnects do not abort the prompt.
     const cleanupDelayMs = getDisconnectCleanupDelayMs(sessionId)

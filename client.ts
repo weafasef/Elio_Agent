@@ -14,7 +14,9 @@ import { Buffer } from 'node:buffer'
 
 // ── Config ──────────────────────────────────────────────────────────────
 
-const WS_URL = 'ws://127.0.0.1:3456/ws/elio'
+const HOST = '127.0.0.1:3456'
+const WS_URL = `ws://${HOST}/ws/elio`
+const HTTP_BASE = `http://${HOST}`
 
 // ── Colors ──────────────────────────────────────────────────────────────
 
@@ -34,8 +36,7 @@ let audioQueue: Array<{ url: string; zh: string }> = []
 let audioPlaying = false
 
 function playAudioFile(url: string): void {
-  const base = WS_URL.replace('/ws/elio', '')
-  const fullUrl = base + url
+  const fullUrl = HTTP_BASE + url
   if (process.platform === 'win32') {
     // Fetch and save to temp, then play
     fetch(fullUrl).then(r => r.arrayBuffer()).then(buf => {
