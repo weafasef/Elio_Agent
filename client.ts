@@ -106,25 +106,23 @@ let connected = false
 function connect(): void {
   ws = new WebSocket(WS_URL)
 
-  ws.on('open', () => {
+  ws.onopen = () => {
     connected = true
     console.log(C.green + '✓ 已连接到 Elio' + C.reset)
     promptLine()
-  })
+  }
 
-  ws.on('close', () => {
+  ws.onclose = () => {
     connected = false
     console.log(C.red + '\n✗ 断开连接，3秒后重连...' + C.reset)
     setTimeout(connect, 3000)
-  })
+  }
 
-  ws.on('error', () => {
-    // ws.close() will trigger on('close') for reconnect
-  })
+  ws.onerror = () => {}
 
-  ws.on('message', (data: Buffer) => {
+  ws.onmessage = (event: MessageEvent) => {
     let msg: any
-    try { msg = JSON.parse(data.toString()) } catch { return }
+    try { msg = JSON.parse(event.data) } catch { return }
 
     switch (msg.type) {
       case 'connected':
@@ -151,7 +149,6 @@ function connect(): void {
               process.stdout.write(`\n${C.dim}📝 ${speech.zh}${C.reset}`)
             }
             process.stdout.write('\n')
-            // Poll for audio — slight delay for file write
             setTimeout(pollAndPlayAudio, 600)
           } else if (!elioBuffer.includes('[调用工具') && !elioBuffer.includes('<personality-mode')) {
             process.stdout.write(`\n${C.cyan}Elio${C.reset}: ${elioBuffer}\n`)
@@ -166,7 +163,7 @@ function connect(): void {
         promptLine()
         break
     }
-  })
+  }
 }
 
 // ── Send ─────────────────────────────────────────────────────────────────
