@@ -38,7 +38,8 @@ let audioPlaying = false
 // ── Incremental display state ──────────────────────────────────────────
 
 let displayedThinks = 0   // how many <think> blocks have been displayed so far
-let displayedPairs = 0    // how many <ja>/<zh> pairs have been displayed so far
+let displayedJa = 0       // how many <ja> blocks have been displayed so far
+let displayedZh = 0       // how many <zh> blocks have been displayed so far
 
 function tryIncrementalDisplay(elioBuffer: string): void {
   const speech = parseSpeech(elioBuffer)
@@ -51,17 +52,16 @@ function tryIncrementalDisplay(elioBuffer: string): void {
     displayedThinks++
   }
 
-  // Show newly completed <ja>/<zh> pairs
-  while (displayedPairs < speech.jaBlocks.length || displayedPairs < speech.zhBlocks.length) {
-    const ja = speech.jaBlocks[displayedPairs]
-    const zh = speech.zhBlocks[displayedPairs]
-    if (zh) {
-      process.stdout.write(`\n${C.cyan}Elio${C.reset}: ${zh}`)
-    }
-    if (ja) {
-      process.stdout.write(`\n${C.dim}🎵 ${ja}${C.reset}`)
-    }
-    displayedPairs++
+  // Show newly completed <ja> blocks (independent of zh)
+  while (displayedJa < speech.jaBlocks.length) {
+    process.stdout.write(`\n${C.dim}🎵 ${speech.jaBlocks[displayedJa]}${C.reset}`)
+    displayedJa++
+  }
+
+  // Show newly completed <zh> blocks (independent of ja)
+  while (displayedZh < speech.zhBlocks.length) {
+    process.stdout.write(`\n${C.cyan}Elio${C.reset}: ${speech.zhBlocks[displayedZh]}`)
+    displayedZh++
   }
 }
 
@@ -158,7 +158,8 @@ function connect(): void {
         if (msg.blockType === 'text') {
           elioBuffer = ''
           displayedThinks = 0
-          displayedPairs = 0
+          displayedJa = 0
+          displayedZh = 0
         }
         break
 
@@ -179,7 +180,7 @@ function connect(): void {
           tryIncrementalDisplay(elioBuffer)
 
           // Fallback: if nothing was displayed incrementally, show whole output
-          if (displayedThinks === 0 && displayedPairs === 0) {
+          if (displayedThinks === 0 && displayedJa === 0 && displayedZh === 0) {
             const speech = parseSpeech(elioBuffer)
             if (speech) {
               for (const t of speech.thinks) {
@@ -202,7 +203,8 @@ function connect(): void {
         }
         elioBuffer = ''
         displayedThinks = 0
-        displayedPairs = 0
+        displayedJa = 0
+        displayedZh = 0
         promptLine()
         break
 
