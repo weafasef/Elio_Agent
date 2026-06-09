@@ -63,15 +63,31 @@ function playNextInQueue(): void {
 
 // ── Parse speech blocks ─────────────────────────────────────────────────
 
-function parseSpeech(text: string): { ja: string; zh: string } | null {
-  const jaMatch = text.match(/<ja>([\s\S]*?)<\/ja>/)
-  const zhMatch = text.match(/<zh>([\s\S]*?)<\/zh>/)
-  if (jaMatch && zhMatch) return { ja: jaMatch[1].trim(), zh: zhMatch[1].trim() }
+interface ParsedSpeech {
+  thinks: string[]   // <think> contents — internal thoughts (NOT spoken)
+  ja: string         // <ja> blocks joined — TTS source
+  zh: string         // <zh> blocks joined — main display text
+}
+
+function parseSpeech(text: string): ParsedSpeech | null {
+  // Extract all blocks (support multiple of each, interleaved)
+  const thinkBlocks = [...text.matchAll(/<think>([\s\S]*?)<\/think>/g)].map(m => m[1].trim())
+  const jaBlocks = [...text.matchAll(/<ja>([\s\S]*?)<\/ja>/g)].map(m => m[1].trim())
+  const zhBlocks = [...text.matchAll(/<zh>([\s\S]*?)<\/zh>/g)].map(m => m[1].trim())
+
+  const ja = jaBlocks.join('')
+  const zh = zhBlocks.join('')
+
+  if (ja || thinkBlocks.length > 0) {
+    return { thinks: thinkBlocks, ja, zh }
+  }
+
+  // Fallback: bare Japanese text without tags
   const stripped = text
     .replace(/\[调用工具:[^\]]*\]/g, '')
     .replace(/<personality-mode>[^<]*<\/personality-mode>/g, '')
     .trim()
-  if (/[぀-ゟ゠-ヿ]/.test(stripped)) return { ja: stripped, zh: '' }
+  if (/[぀-ゟ゠-ヿ]/.test(stripped)) return { thinks: [], ja: stripped, zh: '' }
   return null
 }
 
@@ -122,9 +138,17 @@ function connect(): void {
         if (elioBuffer) {
           const speech = parseSpeech(elioBuffer)
           if (speech) {
-            process.stdout.write(`\n${C.cyan}Elio${C.reset}: ${speech.ja}`)
+            // Display thinks first (dim, with thought bubble)
+            for (const t of speech.thinks) {
+              process.stdout.write(`\n${C.dim}💭 ${t}${C.reset}`)
+            }
+            // zh as main display text (what master reads)
             if (speech.zh) {
-              process.stdout.write(`\n${C.dim}📝 ${speech.zh}${C.reset}`)
+              process.stdout.write(`\n${C.cyan}Elio${C.reset}: ${speech.zh}`)
+            }
+            // ja as subtitle (what's actually spoken)
+            if (speech.ja) {
+              process.stdout.write(`\n${C.dim}🎵 ${speech.ja}${C.reset}`)
             }
             process.stdout.write('\n')
             // Audio will arrive via system_notification/tts_ready
@@ -138,16 +162,14 @@ function connect(): void {
 
       case 'system_notification':
         if (msg.subtype === 'tts_ready' && msg.data) {
-          const { audioUrl, zh } = msg.data
           console.log(C.dim + `\n🔊 播放中...` + C.reset)
-          if (zh) console.log(C.dim + `📝 ${zh}` + C.reset)
           console.log()
           // Queue or play immediately
           if (audioPlaying) {
-            audioQueue.push({ url: audioUrl, zh })
+            audioQueue.push({ url: msg.data.audioUrl, zh: '' })
           } else {
             audioPlaying = true
-            playAudioFile(audioUrl)
+            playAudioFile(msg.data.audioUrl)
           }
         }
         break

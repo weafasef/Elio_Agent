@@ -20,7 +20,7 @@ import { ProviderService } from './providerService.js'
 import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
 import { WorldviewBuffer } from '../../elio/WorldviewBuffer.js'
 import { synthesize, getEmotionForMode, isAvailable } from './ttsService.js'
-import type { SubtitleData } from './ttsService.js'
+// (SubtitleData no longer used directly in MainLoop — parsed output now includes thinks)
 import { sendToSession } from '../ws/handler.js'
 
 const SESSION_ID = 'elio'
@@ -277,26 +277,33 @@ function onOutput(msg: any): void {
         const modeMatch = content.match(/<personality-mode>([^<]+)<\/personality-mode>/)
         if (modeMatch) currentPersonalityMode = modeMatch[1]
 
-        const emotion = getEmotionForMode(currentPersonalityMode)
-        synthesize(speech.ja, speech.zh, emotion).then(result => {
-          if (result) {
-            console.log(
-              `[MainLoop] TTS: ${result.audioPath} | subtitle: ${truncate(result.subtitle.zh, 40)}`,
-            )
-            // Notify connected clients so they can play the right audio
-            const filename = result.audioPath.replace(/\\/g, '/').split('/').pop() || ''
-            sendToSession(SESSION_ID, {
-              type: 'system_notification',
-              subtype: 'tts_ready',
-              data: {
-                audioUrl: `/audio/${filename}`,
-                audioFile: filename,
-                ja: result.subtitle.ja,
-                zh: result.subtitle.zh,
-              },
-            })
-          }
-        })
+        if (speech.thinks.length > 0) {
+          console.log(`[MainLoop] Think: ${speech.thinks.map(t => truncate(t, 40)).join(' | ')}`)
+        }
+
+        // Only synthesize TTS when there's something to speak
+        if (speech.ja) {
+          const emotion = getEmotionForMode(currentPersonalityMode)
+          synthesize(speech.ja, speech.zh, emotion).then(result => {
+            if (result) {
+              console.log(
+                `[MainLoop] TTS: ${result.audioPath} | subtitle: ${truncate(result.subtitle.zh, 40)}`,
+              )
+              // Notify connected clients so they can play the right audio
+              const filename = result.audioPath.replace(/\\/g, '/').split('/').pop() || ''
+              sendToSession(SESSION_ID, {
+                type: 'system_notification',
+                subtype: 'tts_ready',
+                data: {
+                  audioUrl: `/audio/${filename}`,
+                  audioFile: filename,
+                  ja: result.subtitle.ja,
+                  zh: result.subtitle.zh,
+                },
+              })
+            }
+          })
+        }
       }
     }
   } else if (msg?.type === 'stream_event') {
@@ -310,22 +317,24 @@ function onOutput(msg: any): void {
   }
 }
 
-/** Parse `<ja>...</ja>` and `<zh>...</zh>` blocks from Elio's output.
- *  Falls back to treating the whole text as Japanese if no blocks found. */
-function parseSpeechBlocks(text: string): SubtitleData | null {
-  // Preferred: explicit speech blocks
-  const jaMatch = text.match(/<ja>([\s\S]*?)<\/ja>/)
-  const zhMatch = text.match(/<zh>([\s\S]*?)<\/zh>/)
-  if (jaMatch && zhMatch) {
-    return { ja: jaMatch[1].trim(), zh: zhMatch[1].trim() }
+/** Parse `<think>`, `<ja>`, and `<zh>` blocks from Elio's output.
+ *  Multiple `<ja>` blocks are joined directly (Elio writes her own punctuation).
+ *  Returns null only when there's nothing to display or speak. */
+function parseSpeechBlocks(text: string): { ja: string; zh: string; thinks: string[] } | null {
+  // Extract all blocks (support multiple of each, interleaved)
+  const jaBlocks = [...text.matchAll(/<ja>([\s\S]*?)<\/ja>/g)].map(m => m[1].trim())
+  const zhBlocks = [...text.matchAll(/<zh>([\s\S]*?)<\/zh>/g)].map(m => m[1].trim())
+  const thinkBlocks = [...text.matchAll(/<think>([\s\S]*?)<\/think>/g)].map(m => m[1].trim())
+
+  const ja = jaBlocks.join('')
+  const zh = zhBlocks.join('')
+
+  // Has speech blocks or think blocks — return them
+  if (ja || thinkBlocks.length > 0) {
+    return { ja, zh, thinks: thinkBlocks }
   }
 
-  // Only ja block? Still use it
-  if (jaMatch) {
-    return { ja: jaMatch[1].trim(), zh: '' }
-  }
-
-  // Fallback: strip tool tags and check if there's Japanese text
+  // Fallback: strip tool tags and check if there's bare Japanese text
   const stripped = text
     .replace(/\[调用工具:[^\]]*\]/g, '')
     .replace(/<personality-mode>[^<]*<\/personality-mode>/g, '')
@@ -333,12 +342,11 @@ function parseSpeechBlocks(text: string): SubtitleData | null {
 
   if (!stripped) return null
 
-  // Detect Japanese (hiragana, katakana, or CJK with Japanese-specific patterns)
   const hasJapanese = /[぀-ゟ゠-ヿ]/.test(stripped)
   if (!hasJapanese) return null
 
   console.log('[MainLoop] TTS fallback: no speech blocks, treating output as Japanese')
-  return { ja: stripped, zh: '' }
+  return { ja: stripped, zh: '', thinks: [] }
 }
 
 function extractContent(msg: any): string | null {
