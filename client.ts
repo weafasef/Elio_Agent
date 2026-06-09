@@ -35,6 +35,36 @@ const C = {
 let audioQueue: Array<{ url: string; zh: string }> = []
 let audioPlaying = false
 
+// ── Incremental display state ──────────────────────────────────────────
+
+let displayedThinks = 0   // how many <think> blocks have been displayed so far
+let displayedPairs = 0    // how many <ja>/<zh> pairs have been displayed so far
+
+function tryIncrementalDisplay(elioBuffer: string): void {
+  const speech = parseSpeech(elioBuffer)
+  if (!speech) return
+
+  // Show newly completed <think> blocks
+  while (displayedThinks < speech.thinks.length) {
+    const t = speech.thinks[displayedThinks]
+    process.stdout.write(`\n${C.dim}💭 ${t}${C.reset}`)
+    displayedThinks++
+  }
+
+  // Show newly completed <ja>/<zh> pairs
+  while (displayedPairs < speech.jaBlocks.length || displayedPairs < speech.zhBlocks.length) {
+    const ja = speech.jaBlocks[displayedPairs]
+    const zh = speech.zhBlocks[displayedPairs]
+    if (zh) {
+      process.stdout.write(`\n${C.cyan}Elio${C.reset}: ${zh}`)
+    }
+    if (ja) {
+      process.stdout.write(`\n${C.dim}🎵 ${ja}${C.reset}`)
+    }
+    displayedPairs++
+  }
+}
+
 function playAudioFile(url: string): void {
   const fullUrl = HTTP_BASE + url
   if (process.platform === 'win32') {
@@ -65,6 +95,8 @@ function playNextInQueue(): void {
 
 interface ParsedSpeech {
   thinks: string[]   // <think> contents — internal thoughts (NOT spoken)
+  jaBlocks: string[] // individual <ja> blocks (for incremental display)
+  zhBlocks: string[] // individual <zh> blocks (for incremental display)
   ja: string         // <ja> blocks joined — TTS source
   zh: string         // <zh> blocks joined — main display text
 }
@@ -79,7 +111,7 @@ function parseSpeech(text: string): ParsedSpeech | null {
   const zh = zhBlocks.join('')
 
   if (ja || thinkBlocks.length > 0) {
-    return { thinks: thinkBlocks, ja, zh }
+    return { thinks: thinkBlocks, jaBlocks: jaBlocks, zhBlocks: zhBlocks, ja, zh }
   }
 
   // Fallback: bare Japanese text without tags
@@ -87,7 +119,7 @@ function parseSpeech(text: string): ParsedSpeech | null {
     .replace(/\[调用工具:[^\]]*\]/g, '')
     .replace(/<personality-mode>[^<]*<\/personality-mode>/g, '')
     .trim()
-  if (/[぀-ゟ゠-ヿ]/.test(stripped)) return { thinks: [], ja: stripped, zh: '' }
+  if (/[぀-ゟ゠-ヿ]/.test(stripped)) return { thinks: [], jaBlocks: [], zhBlocks: [], ja: stripped, zh: '' }
   return null
 }
 
@@ -123,11 +155,18 @@ function connect(): void {
         break
 
       case 'content_start':
-        if (msg.blockType === 'text') elioBuffer = ''
+        if (msg.blockType === 'text') {
+          elioBuffer = ''
+          displayedThinks = 0
+          displayedPairs = 0
+        }
         break
 
       case 'content_delta':
-        if (msg.text) elioBuffer += msg.text
+        if (msg.text) {
+          elioBuffer += msg.text
+          tryIncrementalDisplay(elioBuffer)
+        }
         break
 
       case 'tool_use_complete':
@@ -136,27 +175,34 @@ function connect(): void {
 
       case 'message_complete':
         if (elioBuffer) {
-          const speech = parseSpeech(elioBuffer)
-          if (speech) {
-            // Display thinks first (dim, with thought bubble)
-            for (const t of speech.thinks) {
-              process.stdout.write(`\n${C.dim}💭 ${t}${C.reset}`)
+          // Final incremental pass — catch any blocks completed in the last delta
+          tryIncrementalDisplay(elioBuffer)
+
+          // Fallback: if nothing was displayed incrementally, show whole output
+          if (displayedThinks === 0 && displayedPairs === 0) {
+            const speech = parseSpeech(elioBuffer)
+            if (speech) {
+              for (const t of speech.thinks) {
+                process.stdout.write(`\n${C.dim}💭 ${t}${C.reset}`)
+              }
+              if (speech.zh) {
+                process.stdout.write(`\n${C.cyan}Elio${C.reset}: ${speech.zh}`)
+              }
+              if (speech.ja) {
+                process.stdout.write(`\n${C.dim}🎵 ${speech.ja}${C.reset}`)
+              }
+              process.stdout.write('\n')
+            } else if (!elioBuffer.includes('[调用工具') && !elioBuffer.includes('<personality-mode')) {
+              process.stdout.write(`\n${C.cyan}Elio${C.reset}: ${elioBuffer}\n`)
             }
-            // zh as main display text (what master reads)
-            if (speech.zh) {
-              process.stdout.write(`\n${C.cyan}Elio${C.reset}: ${speech.zh}`)
-            }
-            // ja as subtitle (what's actually spoken)
-            if (speech.ja) {
-              process.stdout.write(`\n${C.dim}🎵 ${speech.ja}${C.reset}`)
-            }
+          } else {
+            // Incremental display already showed content — just add final newline
             process.stdout.write('\n')
-            // Audio will arrive via system_notification/tts_ready
-          } else if (!elioBuffer.includes('[调用工具') && !elioBuffer.includes('<personality-mode')) {
-            process.stdout.write(`\n${C.cyan}Elio${C.reset}: ${elioBuffer}\n`)
           }
         }
         elioBuffer = ''
+        displayedThinks = 0
+        displayedPairs = 0
         promptLine()
         break
 
