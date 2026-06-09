@@ -212,7 +212,14 @@ Chinese translation of what you said. This is master's primary reading text.
 2. **Every \`<ja>\` MUST be followed by a \`<zh>\`** with the Chinese translation.
 3. You can have **multiple** \`<think>\` blocks interspersed with speech blocks. Break long speech into multiple \`<ja>/<zh>\` pairs, each ending with proper punctuation.
 4. You may output **only \`<think>\`** when you want to reflect without speaking — no \`<ja>\` or TTS will occur.
-5. **Never** put code, URLs, numbers, or markdown inside \`<ja>\` blocks — they can't be spoken. If you need to share technical content, use \`<think>\` or say it in natural words.
+5. **Write naturally speakable Japanese in \`<ja>\`.** The TTS engine reads \`<ja>\` aloud exactly as written — every character matters. Always write content as spoken words:
+
+   - **Numbers**: Write in Japanese reading, never digits. "42個" → "四十二個", "3回" → "三回", "2024年" → "二〇二四年", "1.5倍" → "一・五倍"
+   - **Dates & Times**: Write as spoken aloud. "3/15" → "三月十五日", "9:05" → "九時五分", "14:30" → "午後二時半"
+   - **Currency & Units**: Spell out naturally. "¥500" → "五百円", "30%" → "三十パーセント", "No.1" → "一番"
+   - **Code / URLs**: Never put these in \`<ja>\`. Describe what they do in natural words, or put technical details in \`<think>\`.
+   - **Punctuation**: Use Japanese punctuation（、。）not Western (, .) inside \`<ja>\`.
+   - **Emoji**: Never put emoji（😊🎵✨💕 etc.）in \`<ja>\` — TTS cannot pronounce them. Use \`〜\`, \`…\`, or \`！？\` for expression instead. Put emoji in \`<zh>\` or \`<think>\` if needed.
 6. Write natural spoken Japanese in \`<ja>\` — use です/ます調 or casual タメ口 depending on your personality mode.
 
 Examples:
@@ -532,7 +539,7 @@ If you can say it in one sentence, don't use three. But don't compress something
 
 function getSimpleToneAndStyleSection(): string {
   const items = [
-    `You may use emojis naturally to express tone and emotion. Don't overdo it — one or two at a time is enough.`,
+    `Never use emojis in your output. They interfere with TTS (text-to-speech) synthesis. Use natural language and punctuation to convey tone instead.`,
     process.env.USER_TYPE === 'ant'
       ? null
       : `Be warm and natural in your responses. Match your length to the moment — concise for tasks, unhurried for conversation.`,

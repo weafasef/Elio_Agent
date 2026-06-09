@@ -6,7 +6,7 @@
  */
 
 import { createInterface } from 'node:readline'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -68,14 +68,17 @@ function tryIncrementalDisplay(elioBuffer: string): void {
 function playAudioFile(url: string): void {
   const fullUrl = HTTP_BASE + url
   if (process.platform === 'win32') {
-    // Fetch and save to temp, then play
+    // Use unique filename to avoid overwriting a file that's being played
+    const tmp = join(homedir(), '.elio', 'audio', `_p${Date.now()}_${Math.random().toString(36).slice(2, 6)}.wav`)
     fetch(fullUrl).then(r => r.arrayBuffer()).then(buf => {
-      const tmp = join(homedir(), '.elio', 'audio', '_playback.wav')
       writeFileSync(tmp, Buffer.from(buf))
       spawn('powershell', [
         '-c',
         `(New-Object Media.SoundPlayer '${tmp}').PlaySync()`,
-      ], { stdio: 'ignore' }).on('exit', () => playNextInQueue())
+      ], { stdio: 'ignore' }).on('exit', () => {
+        try { unlinkSync(tmp) } catch {}
+        playNextInQueue()
+      })
     }).catch(() => playNextInQueue())
   } else {
     spawn('ffplay', ['-nodisp', '-autoexit', fullUrl], { stdio: 'ignore' })

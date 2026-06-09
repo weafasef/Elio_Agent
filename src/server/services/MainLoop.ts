@@ -244,55 +244,17 @@ function isKnownRuntimeProviderId(
   return isOpenAIOfficialProviderId(id) || providers.some((p) => p.id === id)
 }
 
-// ── Stream TTS state ──────────────────────────────────────────────────────
+// ── Stream state ──────────────────────────────────────────────────────────
 
 let streamBuffer = ''
-let ttsSentCount = 0  // how many <ja> blocks have been sent to synthesize()
 
 function extractStreamDelta(msg: any): string | null {
   if (msg?.event?.delta?.text) return msg.event.delta.text
   return null
 }
 
-/** Incrementally parse the stream buffer and trigger TTS for newly completed
- *  `<ja>` blocks. Uses `fallback=false` to avoid treating partial Japanese as speech. */
-function triggerStreamTTS(text?: string): void {
-  const source = text ?? streamBuffer
-  const speech = parseSpeechBlocks(source, false)
-  if (!speech) return
-
-  while (ttsSentCount < speech.jaBlocks.length) {
-    const ja = speech.jaBlocks[ttsSentCount]
-    const zh = speech.zhBlocks[ttsSentCount] ?? ''
-    const emotion = getEmotionForMode(currentPersonalityMode)
-
-    synthesize(ja, zh, emotion).then(result => {
-      if (result) {
-        console.log(
-          `[MainLoop] Stream TTS #${ttsSentCount}: ${result.audioPath} | ${truncate(zh, 40)}`,
-        )
-        const filename = result.audioPath.replace(/\\/g, '/').split('/').pop() || ''
-        sendToSession(SESSION_ID, {
-          type: 'system_notification',
-          subtype: 'tts_ready',
-          data: {
-            audioUrl: `/audio/${filename}`,
-            audioFile: filename,
-            ja: result.subtitle.ja,
-            zh: result.subtitle.zh,
-          },
-        })
-      }
-    })
-
-    console.log(`[MainLoop] Stream TTS #${ttsSentCount} triggered: ${truncate(ja, 40)}`)
-    ttsSentCount++
-  }
-}
-
 function resetStreamState(): void {
   streamBuffer = ''
-  ttsSentCount = 0
 }
 
 // ── Output handler ───────────────────────────────────────────────────────
@@ -326,37 +288,33 @@ function onOutput(msg: any): void {
       const modeMatch = content.match(/<personality-mode>([^<]+)<\/personality-mode>/)
       if (modeMatch) currentPersonalityMode = modeMatch[1]
 
-      // Final TTS pass with full content (dedup via ttsSentCount)
-      triggerStreamTTS(content)
-
-      // If no stream_events arrived, fall back to all-in-one synthesis
-      if (ttsSentCount === 0) {
-        const speech = parseSpeechBlocks(content)
-        if (speech) {
-          if (speech.thinks.length > 0) {
-            console.log(`[MainLoop] Think: ${speech.thinks.map(t => truncate(t, 40)).join(' | ')}`)
-          }
-          if (speech.ja) {
-            const emotion = getEmotionForMode(currentPersonalityMode)
-            synthesize(speech.ja, speech.zh, emotion).then(result => {
-              if (result) {
-                console.log(
-                  `[MainLoop] TTS: ${result.audioPath} | subtitle: ${truncate(result.subtitle.zh, 40)}`,
-                )
-                const filename = result.audioPath.replace(/\\/g, '/').split('/').pop() || ''
-                sendToSession(SESSION_ID, {
-                  type: 'system_notification',
-                  subtype: 'tts_ready',
-                  data: {
-                    audioUrl: `/audio/${filename}`,
-                    audioFile: filename,
-                    ja: result.subtitle.ja,
-                    zh: result.subtitle.zh,
-                  },
-                })
-              }
-            })
-          }
+      // Always synthesize from full content (not stream fragments)
+      resetStreamState()
+      const speech = parseSpeechBlocks(content)
+      if (speech) {
+        if (speech.thinks.length > 0) {
+          console.log(`[MainLoop] Think: ${speech.thinks.map(t => truncate(t, 40)).join(' | ')}`)
+        }
+        if (speech.ja) {
+          const emotion = getEmotionForMode(currentPersonalityMode)
+          synthesize(speech.ja, speech.zh, emotion).then(result => {
+            if (result) {
+              console.log(
+                `[MainLoop] TTS: ${result.audioPath} | subtitle: ${truncate(result.subtitle.zh, 40)}`,
+              )
+              const filename = result.audioPath.replace(/\\/g, '/').split('/').pop() || ''
+              sendToSession(SESSION_ID, {
+                type: 'system_notification',
+                subtype: 'tts_ready',
+                data: {
+                  audioUrl: `/audio/${filename}`,
+                  audioFile: filename,
+                  ja: result.subtitle.ja,
+                  zh: result.subtitle.zh,
+                },
+              })
+            }
+          })
         }
       }
     }
@@ -367,8 +325,8 @@ function onOutput(msg: any): void {
       // Detect personality mode from streaming text
       const modeMatch = streamBuffer.match(/<personality-mode>([^<]+)<\/personality-mode>/)
       if (modeMatch) currentPersonalityMode = modeMatch[1]
-      // Trigger TTS for newly completed <ja> blocks
-      triggerStreamTTS()
+      // Do NOT trigger TTS during streaming — wait for full assistant message
+      // to synthesize complete speech as one audio file
     }
   } else if (msg?.type === 'user') {
     // New world-view tick — reset stream state
