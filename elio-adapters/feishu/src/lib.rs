@@ -1,0 +1,1 @@
+//! Placeholder — feishu adapter
