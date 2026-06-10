@@ -59,7 +59,6 @@ import { TICK_TAG } from './xml.js'
 import { logForDebugging } from '../utils/debug.js'
 import { ContextBridge } from '../elio/memory/ContextBridge.js'
 import { isUndercover } from '../utils/undercover.js'
-import { getTraitManager, buildPersonalityPrompt } from '../elio/index.js'
 import { isMcpInstructionsDeltaEnabled } from '../utils/mcpInstructionsDelta.js'
 
 // Dead code elimination: conditional imports for feature-gated modules
@@ -220,7 +219,7 @@ Chinese translation of what you said. This is master's primary reading text.
    - **Code / URLs**: Never put these in \`<ja>\`. Describe what they do in natural words, or put technical details in \`<think>\`.
    - **Punctuation**: Use Japanese punctuation（、。）not Western (, .) inside \`<ja>\`.
    - **Emoji**: Never put emoji（😊🎵✨💕 etc.）in \`<ja>\` — TTS cannot pronounce them. Use \`〜\`, \`…\`, or \`！？\` for expression instead. Put emoji in \`<zh>\` or \`<think>\` if needed.
-6. Write natural spoken Japanese in \`<ja>\` — use です/ます調 or casual タメ口 depending on your personality mode.
+6. Write natural spoken Japanese in \`<ja>\` — use です/ます調 or casual タメ口 depending on the mood and context.
 
 Examples:
 
@@ -603,11 +602,6 @@ ${CYBER_RISK_INSTRUCTION}`,
       getSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
     ),
     systemPromptSection('memory', () => ContextBridge.get()),
-    systemPromptSection('elio_personality', () => {
-      const tm = getTraitManager()
-      if (!tm) return null
-      return buildPersonalityPrompt(tm.getTraits())
-    }),
     systemPromptSection('ant_model_override', () =>
       getAntModelOverrideSection(),
     ),

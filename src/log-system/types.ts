@@ -36,9 +36,7 @@ export type AuditEventType =
   | 'memory.recall'
   | 'memory.save'
   | 'memory.consolidate'
-  // 人格 & 情感
-  | 'personality.snapshot'
-  | 'personality.evolution'
+  // 情感
   | 'emotion.snapshot'
   | 'emotion.trigger'
   // 反思 & 梦境
@@ -73,7 +71,6 @@ export interface SessionStartPayload {
   cwd: string
   platform: string
   hostname: string
-  personality_traits?: Record<string, number>
   emotional_state?: string
 }
 

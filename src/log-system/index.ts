@@ -359,18 +359,6 @@ export class AuditLogger {
     })
   }
 
-  /** 记录人格快照 */
-  async personalitySnapshot(
-    traits: Record<string, number>,
-    version: number,
-  ): Promise<void> {
-    await this.event('personality.snapshot', {
-      traits,
-      version,
-      sinceLastChange: localISOString(new Date()),
-    })
-  }
-
   /** 记录情感快照 */
   async emotionSnapshot(vad: {
     valence: number

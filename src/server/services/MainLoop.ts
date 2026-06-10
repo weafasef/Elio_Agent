@@ -19,7 +19,7 @@ import { SettingsService } from './settingsService.js'
 import { ProviderService } from './providerService.js'
 import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
 import { WorldviewBuffer } from '../../elio/WorldviewBuffer.js'
-import { synthesize, getEmotionForMode, isAvailable } from './ttsService.js'
+import { synthesize, isAvailable } from './ttsService.js'
 // (SubtitleData no longer used directly in MainLoop — parsed output now includes thinks)
 import { sendToSession } from '../ws/handler.js'
 
@@ -37,7 +37,6 @@ let processing = false      // Elio is mid-turn (worldview sent, no result yet)
 let starting = false        // Guard: prevent duplicate session spawns
 let startTime: number | null = null
 let lastElioOutput: string | null = null
-let currentPersonalityMode: string = 'cute obedient'
 let safetyTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
@@ -296,10 +295,6 @@ function onOutput(msg: any): void {
       lastElioOutput = content
       console.log(`[MainLoop] Elio: ${truncate(content)}`)
 
-      // Update personality mode if present
-      const modeMatch = content.match(/<personality-mode>([^<]+)<\/personality-mode>/)
-      if (modeMatch) currentPersonalityMode = modeMatch[1]
-
       // Always synthesize from full content (not stream fragments)
       resetStreamState()
       const speech = parseSpeechBlocks(content)
@@ -308,7 +303,7 @@ function onOutput(msg: any): void {
           console.log(`[MainLoop] Think: ${speech.thinks.map(t => truncate(t, 40)).join(' | ')}`)
         }
         if (speech.ja) {
-          const emotion = getEmotionForMode(currentPersonalityMode)
+          const emotion = 'happy'
           synthesize(speech.ja, speech.zh, emotion, (chunk) => {
             const filename = chunk.audioPath.replace(/\\/g, '/').split('/').pop() || ''
             sendToSession(SESSION_ID, {
@@ -336,9 +331,6 @@ function onOutput(msg: any): void {
     const deltaText = extractStreamDelta(msg)
     if (deltaText) {
       streamBuffer += deltaText
-      // Detect personality mode from streaming text
-      const modeMatch = streamBuffer.match(/<personality-mode>([^<]+)<\/personality-mode>/)
-      if (modeMatch) currentPersonalityMode = modeMatch[1]
       // Do NOT trigger TTS during streaming — wait for full assistant message
       // to synthesize complete speech as one audio file
     }

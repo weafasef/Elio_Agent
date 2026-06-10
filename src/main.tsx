@@ -2604,7 +2604,6 @@ async function run(): Promise<CommanderCommand> {
       | undefined
 
     await Promise.all([
-      import('./elio/index.js').then(m => m.initElio()),
       memCfg?.deepseekApiKey
         ? import('./elio/memory/MemoryAgent.js')
             .then(m =>

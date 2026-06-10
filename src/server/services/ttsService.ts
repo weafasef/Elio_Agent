@@ -78,14 +78,6 @@ const CN_EMOTION_MAP: Record<string, string> = {
   '默认': 'default',
 }
 
-/** Map personality mode to emotion key. */
-const MODE_EMOTION: Record<string, string> = {
-  'cute obedient': 'happy',
-  'cute rebellious': 'happy',
-  'serious obedient': 'happy',
-  'serious rebellious': 'disgust',
-}
-
 // ── Voice auto-discovery ───────────────────────────────────────────────────
 
 function scanVoices(): void {
@@ -491,11 +483,6 @@ export async function synthesize(
     console.error(`[TTS] Failed: ${e instanceof Error ? e.message : e}`)
     return null
   }
-}
-
-/** Map personality mode to emotion key for reference audio selection. */
-export function getEmotionForMode(personalityMode: string): string {
-  return MODE_EMOTION[personalityMode] ?? 'happy'
 }
 
 /** Check if GPT-SoVITS API is reachable. */
