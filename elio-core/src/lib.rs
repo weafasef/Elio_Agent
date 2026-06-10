@@ -5,3 +5,4 @@ pub mod prompt;
 pub mod llm;
 pub mod tool;
 pub mod registry;
+pub mod log;

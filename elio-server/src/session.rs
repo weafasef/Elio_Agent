@@ -3,6 +3,8 @@
 use elio_core::mainloop::{MainLoopConfig, MainLoop};
 use elio_core::memory::MemorySystem;
 use elio_core::llm::DeepSeekClient;
+use elio_core::log::AuditLogger;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// 单个会话
@@ -11,7 +13,7 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(config: MainLoopConfig, memory: Box<dyn MemorySystem>) -> Self {
+    pub fn new(config: MainLoopConfig, memory: Box<dyn MemorySystem>, logger: Arc<AuditLogger>) -> Self {
         let api_key = std::env::var("ANTHROPIC_AUTH_TOKEN")
             .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
             .unwrap_or_default();
@@ -23,7 +25,7 @@ impl Session {
         ));
 
         Session {
-            inner: Mutex::new(MainLoop::new(config, llm, memory)),
+            inner: Mutex::new(MainLoop::new(config, llm, memory, logger)),
         }
     }
 }
@@ -40,9 +42,9 @@ impl SessionManager {
         }
     }
 
-    pub fn create_default(&mut self, config: MainLoopConfig, memory: Box<dyn MemorySystem>) -> &Session {
+    pub fn create_default(&mut self, config: MainLoopConfig, memory: Box<dyn MemorySystem>, logger: Arc<AuditLogger>) -> &Session {
         tracing::info!("创建默认会话");
-        self.sessions.push(Session::new(config, memory));
+        self.sessions.push(Session::new(config, memory, logger));
         self.sessions.last().unwrap()
     }
 

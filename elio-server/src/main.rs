@@ -72,6 +72,11 @@ async fn main() -> anyhow::Result<()> {
     }
     let system_prompt = prompt_mgr.build_system_prompt(None);
 
+    // 初始化日志
+    let log_dir = resolve_logs_dir();
+    info!("日志目录: {:?}", log_dir);
+    let logger = Arc::new(elio_core::log::AuditLogger::new(log_dir));
+
     // 创建会话
     let mut session_mgr = SessionManager::new();
     let mainloop_config = elio_core::mainloop::MainLoopConfig {
@@ -81,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
         system_prompt,
         ..Default::default()
     };
-    session_mgr.create_default(mainloop_config, Box::new(graph_memory));
+    session_mgr.create_default(mainloop_config, Box::new(graph_memory), logger);
 
     // 提取地址信息
     let addr = format!("{}:{}", config.server.host, config.server.port);
@@ -163,17 +168,26 @@ fn resolve_memory_dir(dir: &PathBuf) -> PathBuf {
 
 /// 解析提示词目录路径
 fn resolve_prompts_dir() -> PathBuf {
-    // 优先在 CWD 下找 prompts/
     let cwd_prompts = std::env::current_dir()
         .unwrap_or_default()
         .join("prompts");
     if cwd_prompts.exists() {
         return cwd_prompts;
     }
-    // 回退到 Cargo manifest 目录
     let manifest_prompts = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .join("prompts");
     manifest_prompts
+}
+
+/// 解析日志目录路径
+fn resolve_logs_dir() -> PathBuf {
+    let cwd_logs = std::env::current_dir()
+        .unwrap_or_default()
+        .join("logs");
+    if cwd_logs.exists() || cwd_logs.parent().map_or(false, |p| p.exists()) {
+        return cwd_logs;
+    }
+    PathBuf::from("logs")
 }

@@ -1,10 +1,12 @@
 //! MainLoop — Elio 的自主感知-决策-行动循环
 
 use crate::llm::{ChatRequest, ContentBlock, LlmClient, Message, MessageRole};
+use crate::log::AuditLogger;
 use crate::memory::{MemoryEvent, MemorySystem};
 use crate::registry::ToolRegistry;
 use crate::tool::ToolContext;
 use crate::worldview::{PerceptSource, WorldviewBuffer};
+use std::sync::Arc;
 use tracing::{debug, info};
 
 /// MainLoop 配置
@@ -117,10 +119,12 @@ pub struct MainLoop {
     pub tools: ToolRegistry,
     /// 对话历史
     pub conversation: Conversation,
+    /// 审计日志
+    pub logger: Arc<AuditLogger>,
 }
 
 impl MainLoop {
-    pub fn new(config: MainLoopConfig, llm: Box<dyn LlmClient>, memory: Box<dyn MemorySystem>) -> Self {
+    pub fn new(config: MainLoopConfig, llm: Box<dyn LlmClient>, memory: Box<dyn MemorySystem>, logger: Arc<AuditLogger>) -> Self {
         Self {
             state: LoopState::Idle,
             config,
@@ -129,6 +133,7 @@ impl MainLoop {
             memory,
             tools: ToolRegistry::new(),
             conversation: Conversation::new(50),
+            logger,
         }
     }
 
@@ -142,6 +147,13 @@ impl MainLoop {
         });
         self.worldview.push(text, PerceptSource::User);
         self.state = LoopState::Thinking;
+
+        // 日志
+        self.logger.log(
+            crate::log::EVENT_USER_MESSAGE,
+            text,
+            Some("user"),
+        );
     }
 
     /// 定时心跳 tick（每 30s 调用）
@@ -150,9 +162,10 @@ impl MainLoop {
     /// 这样 step() 不会跳过，Elio 可以主动说话。
     pub fn on_timer_tick(&mut self) {
         self.worldview.push("定时心跳 — 30秒已过去", PerceptSource::Timer);
-        // 加入系统消息触发 step
         self.conversation.add_user_message("<system tick>");
         self.state = LoopState::Thinking;
+
+        self.logger.log(crate::log::EVENT_SYSTEM_HEARTBEAT, "30s tick", Some("system"));
     }
 
     /// 执行一步 MainLoop tick
@@ -179,6 +192,13 @@ impl MainLoop {
 
         self.state = LoopState::Thinking;
 
+        // 日志：记录发给 Elio 的提示词
+        self.logger.log(
+            crate::log::EVENT_SYSTEM_PROMPT,
+            &format!("worldview:\n{worldview_text}\n\nmem_ctx:\n{mem_ctx}"),
+            Some("system"),
+        );
+
         let request = ChatRequest {
             model: self.config.model.clone(),
             system: system_prompt,
@@ -204,6 +224,13 @@ impl MainLoop {
                         event_type: crate::memory::EventType::AssistantMessage,
                         session_id: None,
                     });
+
+                    // 日志：记录 Elio 回复
+                    self.logger.log(
+                        crate::log::EVENT_ELIO_RESPONSE,
+                        text,
+                        Some("elio"),
+                    );
                     info!("Elio 回复: {:.100}", text);
                     self.state = LoopState::Idle;
                     return StepResult::Response(text.clone());
@@ -296,7 +323,8 @@ mod tests {
         let config = MainLoopConfig::default();
         let llm = Box::new(MockLlm);
         let memory = Box::new(GraphMemorySystem::new(None, None));
-        let mut loop_ = MainLoop::new(config, llm, memory);
+        let logger = Arc::new(crate::log::AuditLogger::new(std::path::PathBuf::from("/tmp/elio_test_log")));
+        let mut loop_ = MainLoop::new(config, llm, memory, logger);
 
         loop_.on_user_message("你好 Elio");
         assert_eq!(loop_.state, LoopState::Thinking);
