@@ -356,18 +356,36 @@ export interface SubtitleData {
 }
 
 export interface TTSResult {
-  audioPath: string
+  audioPath: string       // first chunk path (backward compat)
+  chunkPaths: string[]    // all chunk paths in order
   subtitle: SubtitleData
 }
 
+export interface TTSChunkResult {
+  audioPath: string
+  chunkIndex: number
+}
+
+/** Write a single sentence as a valid WAV file given the shared header template. */
+function writeChunkWav(wavHeader: Buffer, sampleRate: number, pcm: Buffer, path: string): void {
+  const h = Buffer.from(wavHeader)
+  h.writeUInt32LE(36 + pcm.length, 4)   // RIFF chunk size = 36 + PCM bytes
+  h.writeUInt32LE(pcm.length, 40)       // data subchunk size
+  writeFileSync(path, Buffer.concat([h, pcm]))
+}
+
 /**
- * Synthesize speech from Japanese text with the active voice.
- * Saves audio + subtitle JSON to ~/.elio/audio/.
+ * Synthesize speech with streaming — each sentence becomes a standalone WAV
+ * as soon as GPT-SoVITS produces it, cutting perceived latency from ~11s to ~2s.
+ *
+ * `onChunk` fires immediately when a sentence's audio file is ready.
+ * Returns the full result once all sentences have been streamed.
  */
 export async function synthesize(
   jaText: string,
   zhText: string,
   emotion: string = 'happy',
+  onChunk?: (chunk: TTSChunkResult) => void,
 ): Promise<TTSResult | null> {
   const ref = getRefAudio(emotion)
   if (!ref) {
@@ -376,8 +394,11 @@ export async function synthesize(
   }
 
   const promptLang = activeVoice?.lang ?? 'ja'
+  const timestamp = Date.now()
+  const baseName = `elio_${timestamp}_${emotion}`
 
   try {
+    const t0 = Date.now()
     const res = await fetch(TTS_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -388,46 +409,84 @@ export async function synthesize(
         prompt_lang: promptLang,
         prompt_text: ref.text,
         media_type: 'wav',
-        streaming_mode: false,
-        // Quality parameters matching web UI defaults
-        text_split_method: 'cut5',  // per-punctuation split: reliable with v4 cross-lingual
-        batch_size: 20,             // batched inference across segments
-        top_k: 15,                  // more focused sampling (API default=5, web GUI=15~20)
-        top_p: 0.6,                 // nucleus filtering (API default=1, web GUI=0.6)
-        temperature: 0.6,           // less random (API default=1, web GUI=0.6)
-        seed: -1,                   // random seed per call
+        streaming_mode: true,        // ★ stream each sentence as it's generated
+        text_split_method: 'cut5',
+        batch_size: 1,               // one sentence per batch → first audio at ~2s
+        top_k: 5,                    // reduced from 15, negligible quality impact
+        top_p: 0.6,
+        temperature: 0.6,
+        seed: -1,
         parallel_infer: true,
         repetition_penalty: 1.35,
-        sample_steps: 32,
-        super_sampling: false,
       }),
     })
 
     if (!res.ok) {
-      const err = await res
-        .json()
-        .catch(() => ({ message: res.statusText }))
+      const err = await res.json().catch(() => ({ message: res.statusText }))
       console.error(`[TTS] API error: ${err.message || err}`)
       return null
     }
 
-    const buffer = Buffer.from(await res.arrayBuffer())
-    const timestamp = Date.now()
-    const baseName = `elio_${timestamp}_${emotion}`
-    const audioPath = join(AUDIO_DIR, `${baseName}.wav`)
-    const subtitlePath = join(AUDIO_DIR, `${baseName}.subtitle.json`)
+    // ── Read streaming response ───────────────────────────────────────────
+    // GPT-SoVITS yields: 44-byte WAV header + one raw-PCM chunk per sentence
+    const reader = res.body!.getReader()
+    let wavHeader: Buffer | null = null
+    let sampleRate = 32000
+    let chunkIndex = 0
+    const chunkPaths: string[] = []
 
-    writeFileSync(audioPath, buffer)
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      let buf = Buffer.from(value)
+
+      // First read(s): extract WAV header (44 bytes)
+      if (!wavHeader) {
+        if (buf.length >= 44) {
+          wavHeader = buf.subarray(0, 44)
+          sampleRate = wavHeader.readUInt32LE(24)
+          // Remaining bytes after header = first sentence PCM
+          const pcm = buf.subarray(44)
+          if (pcm.length > 0) {
+            const path = join(AUDIO_DIR, `${baseName}_${chunkIndex}.wav`)
+            writeChunkWav(wavHeader, sampleRate, pcm, path)
+            chunkPaths.push(path)
+            console.log(`[TTS] Chunk ${chunkIndex}: ${pcm.length}B PCM (${((Date.now() - t0) / 1000).toFixed(1)}s)`)
+            onChunk?.({ audioPath: path, chunkIndex })
+            chunkIndex++
+          }
+        }
+        continue
+      }
+
+      // Subsequent reads: one sentence's PCM per read
+      if (buf.length > 0) {
+        const path = join(AUDIO_DIR, `${baseName}_${chunkIndex}.wav`)
+        writeChunkWav(wavHeader, sampleRate, buf, path)
+        chunkPaths.push(path)
+        console.log(`[TTS] Chunk ${chunkIndex}: ${buf.length}B PCM (${((Date.now() - t0) / 1000).toFixed(1)}s)`)
+        onChunk?.({ audioPath: path, chunkIndex })
+        chunkIndex++
+      }
+    }
+
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1)
+    console.log(`[TTS] Done: ${chunkPaths.length} chunks in ${elapsed}s | subtitle: ${truncate(zhText, 40)}`)
+
+    // Save subtitle JSON
+    const subtitlePath = join(AUDIO_DIR, `${baseName}.subtitle.json`)
     writeFileSync(
       subtitlePath,
       JSON.stringify({ ja: jaText, zh: zhText }, null, 2),
       'utf-8',
     )
 
-    console.log(
-      `[TTS] Saved: ${audioPath} (${buffer.length} bytes) | subtitle: ${truncate(zhText, 40)}`,
-    )
-    return { audioPath, subtitle: { ja: jaText, zh: zhText } }
+    return {
+      audioPath: chunkPaths[0] ?? '',
+      chunkPaths,
+      subtitle: { ja: jaText, zh: zhText },
+    }
   } catch (e) {
     console.error(`[TTS] Failed: ${e instanceof Error ? e.message : e}`)
     return null

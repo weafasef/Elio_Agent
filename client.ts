@@ -32,8 +32,9 @@ const C = {
 
 // ── Audio playback ──────────────────────────────────────────────────────
 
-let audioQueue: Array<{ url: string; zh: string }> = []
+let audioQueue: Array<{ filePath: string; zh: string }> = []
 let audioPlaying = false
+let lastTtsJa = ''  // track current TTS session by ja text
 
 // ── Incremental display state ──────────────────────────────────────────
 
@@ -65,25 +66,35 @@ function tryIncrementalDisplay(elioBuffer: string): void {
   }
 }
 
-function playAudioFile(url: string): void {
-  const fullUrl = HTTP_BASE + url
+function playAudioFile(filePath: string): void {
   if (process.platform === 'win32') {
-    // Use unique filename to avoid overwriting a file that's being played
-    const tmp = join(homedir(), '.elio', 'audio', `_p${Date.now()}_${Math.random().toString(36).slice(2, 6)}.wav`)
-    fetch(fullUrl).then(r => r.arrayBuffer()).then(buf => {
-      writeFileSync(tmp, Buffer.from(buf))
-      spawn('powershell', [
-        '-c',
-        `(New-Object Media.SoundPlayer '${tmp}').PlaySync()`,
-      ], { stdio: 'ignore' }).on('exit', () => {
-        try { unlinkSync(tmp) } catch {}
-        playNextInQueue()
-      })
-    }).catch(() => playNextInQueue())
+    spawn('powershell', [
+      '-c',
+      `(New-Object Media.SoundPlayer '${filePath}').PlaySync()`,
+    ], { stdio: 'ignore' }).on('exit', () => {
+      try { unlinkSync(filePath) } catch {}
+      playNextInQueue()
+    })
   } else {
-    spawn('ffplay', ['-nodisp', '-autoexit', fullUrl], { stdio: 'ignore' })
+    spawn('ffplay', ['-nodisp', '-autoexit', filePath], { stdio: 'ignore' })
       .on('exit', () => playNextInQueue())
   }
+}
+
+function enqueueChunk(url: string): void {
+  // Pre-download NOW so file is local when it's time to play
+  const fullUrl = HTTP_BASE + url
+  const tmp = join(homedir(), '.elio', 'audio', `_p${Date.now()}_${Math.random().toString(36).slice(2, 6)}.wav`)
+  fetch(fullUrl).then(r => r.arrayBuffer()).then(buf => {
+    writeFileSync(tmp, Buffer.from(buf))
+    audioQueue.push({ filePath: tmp, zh: '' })
+    if (!audioPlaying) {
+      audioPlaying = true
+      playNextInQueue()
+    }
+  }).catch(() => {
+    playNextInQueue()
+  })
 }
 
 function playNextInQueue(): void {
@@ -91,7 +102,7 @@ function playNextInQueue(): void {
   if (audioQueue.length === 0) return
   const next = audioQueue.shift()!
   audioPlaying = true
-  playAudioFile(next.url)
+  playAudioFile(next.filePath)
 }
 
 // ── Parse speech blocks ─────────────────────────────────────────────────
@@ -212,16 +223,22 @@ function connect(): void {
         break
 
       case 'system_notification':
-        if (msg.subtype === 'tts_ready' && msg.data) {
+        // ── Streaming TTS: pre-download each sentence as it arrives ────
+        if (msg.subtype === 'tts_chunk' && msg.data) {
+          const chunkJa: string = msg.data.ja ?? ''
+          // New TTS session → flush old queue
+          if (chunkJa && chunkJa !== lastTtsJa) {
+            lastTtsJa = chunkJa
+            audioQueue = []
+          }
+          console.log(C.dim + `\n🔊 句子 ${msg.data.chunkIndex + 1} 已就绪` + C.reset)
+          enqueueChunk(msg.data.audioUrl)
+        }
+        // ── Legacy: full-file TTS (backward compat) ────────────────────
+        else if (msg.subtype === 'tts_ready' && msg.data) {
           console.log(C.dim + `\n🔊 播放中...` + C.reset)
           console.log()
-          // Queue or play immediately
-          if (audioPlaying) {
-            audioQueue.push({ url: msg.data.audioUrl, zh: '' })
-          } else {
-            audioPlaying = true
-            playAudioFile(msg.data.audioUrl)
-          }
+          enqueueChunk(msg.data.audioUrl)
         }
         break
 

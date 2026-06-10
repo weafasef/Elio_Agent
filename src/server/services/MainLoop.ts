@@ -309,22 +309,24 @@ function onOutput(msg: any): void {
         }
         if (speech.ja) {
           const emotion = getEmotionForMode(currentPersonalityMode)
-          synthesize(speech.ja, speech.zh, emotion).then(result => {
+          synthesize(speech.ja, speech.zh, emotion, (chunk) => {
+            const filename = chunk.audioPath.replace(/\\/g, '/').split('/').pop() || ''
+            sendToSession(SESSION_ID, {
+              type: 'system_notification',
+              subtype: 'tts_chunk',
+              data: {
+                audioUrl: `/audio/${filename}`,
+                audioFile: filename,
+                chunkIndex: chunk.chunkIndex,
+                ja: speech.ja,
+                zh: speech.zh,
+              },
+            })
+          }).then(result => {
             if (result) {
               console.log(
-                `[MainLoop] TTS: ${result.audioPath} | subtitle: ${truncate(result.subtitle.zh, 40)}`,
+                `[MainLoop] TTS: ${result.chunkPaths.length} chunks | subtitle: ${truncate(result.subtitle.zh, 40)}`,
               )
-              const filename = result.audioPath.replace(/\\/g, '/').split('/').pop() || ''
-              sendToSession(SESSION_ID, {
-                type: 'system_notification',
-                subtype: 'tts_ready',
-                data: {
-                  audioUrl: `/audio/${filename}`,
-                  audioFile: filename,
-                  ja: result.subtitle.ja,
-                  zh: result.subtitle.zh,
-                },
-              })
             }
           })
         }
