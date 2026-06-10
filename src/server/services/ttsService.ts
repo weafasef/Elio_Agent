@@ -369,8 +369,8 @@ export interface TTSChunkResult {
 /** Write a single sentence as a valid WAV file given the shared header template. */
 function writeChunkWav(wavHeader: Buffer, sampleRate: number, pcm: Buffer, path: string): void {
   const h = Buffer.from(wavHeader)
-  h.writeUInt32LE(36 + pcm.length, 4)   // RIFF chunk size = 36 + PCM bytes
-  h.writeUInt32LE(pcm.length, 40)       // data subchunk size
+  h.writeUInt32LE(36 + pcm.length, 4)
+  h.writeUInt32LE(pcm.length, 40)
   writeFileSync(path, Buffer.concat([h, pcm]))
 }
 

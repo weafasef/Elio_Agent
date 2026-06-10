@@ -32,9 +32,41 @@ const C = {
 
 // ── Audio playback ──────────────────────────────────────────────────────
 
-let audioQueue: Array<{ filePath: string; zh: string }> = []
-let audioPlaying = false
-let lastTtsJa = ''  // track current TTS session by ja text
+import type { ChildProcess } from 'node:child_process'
+
+let audioPlayer: ChildProcess | null = null
+
+/** Spawn a persistent powershell process that reads file paths from stdin
+ *  and plays them one by one. Single process → no per-chunk spawn overhead. */
+function startAudioPlayer(): ChildProcess {
+  const ps = spawn('powershell', [
+    '-NoProfile', '-NonInteractive', '-Command',
+    'while (($f = [Console]::ReadLine()) -ne $null) { if ($f -eq "__END__") { break }; $p = New-Object Media.SoundPlayer $f; $p.PlaySync(); $p.Dispose() }',
+  ], {
+    stdio: ['pipe', 'inherit', 'inherit'],
+  })
+  ps.on('exit', () => {
+    audioPlayer = null
+  })
+  return ps
+}
+
+function ensurePlayer(): ChildProcess {
+  if (!audioPlayer || audioPlayer.exitCode !== null) {
+    audioPlayer = startAudioPlayer()
+  }
+  return audioPlayer
+}
+
+function killPlayer(): void {
+  if (audioPlayer && audioPlayer.exitCode === null) {
+    try {
+      audioPlayer.stdin?.write('__END__\n')
+    } catch {}
+    audioPlayer.kill()
+  }
+  audioPlayer = null
+}
 
 // ── Incremental display state ──────────────────────────────────────────
 
@@ -66,43 +98,35 @@ function tryIncrementalDisplay(elioBuffer: string): void {
   }
 }
 
-function playAudioFile(filePath: string): void {
-  if (process.platform === 'win32') {
-    spawn('powershell', [
-      '-c',
-      `(New-Object Media.SoundPlayer '${filePath}').PlaySync()`,
-    ], { stdio: 'ignore' }).on('exit', () => {
-      try { unlinkSync(filePath) } catch {}
-      playNextInQueue()
-    })
-  } else {
-    spawn('ffplay', ['-nodisp', '-autoexit', filePath], { stdio: 'ignore' })
-      .on('exit', () => playNextInQueue())
-  }
+function logTiming(label: string, chunkIdx: number): void {
+  const now = new Date()
+  const ts = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${now.getMilliseconds().toString().padStart(3, '0')}`
+  console.log(C.dim + `  ⏱ [${ts}] ${label} chunk#${chunkIdx}` + C.reset)
+}
+
+let chunkIdxCounter = 0
+
+function feedPlayer(filePath: string, chunkIdx: number): void {
+  ensurePlayer()
+  logTiming('▶ 送入播放器', chunkIdx)
+  audioPlayer!.stdin?.write(filePath + '\n')
 }
 
 function enqueueChunk(url: string): void {
-  // Pre-download NOW so file is local when it's time to play
+  const myIdx = chunkIdxCounter++
+  logTiming('▽ 收到，开始下载', myIdx)
   const fullUrl = HTTP_BASE + url
   const tmp = join(homedir(), '.elio', 'audio', `_p${Date.now()}_${Math.random().toString(36).slice(2, 6)}.wav`)
   fetch(fullUrl).then(r => r.arrayBuffer()).then(buf => {
     writeFileSync(tmp, Buffer.from(buf))
-    audioQueue.push({ filePath: tmp, zh: '' })
-    if (!audioPlaying) {
-      audioPlaying = true
-      playNextInQueue()
-    }
+    logTiming('✓ 下载完成，送入播放器', myIdx)
+    feedPlayer(tmp, myIdx)
+    // Schedule cleanup after playback (SoundPlayer doesn't notify when done
+    // since it's a persistent process, we clean up lazily)
+    setTimeout(() => { try { unlinkSync(tmp) } catch {} }, 30_000)
   }).catch(() => {
-    playNextInQueue()
+    logTiming('✗ 下载失败', myIdx)
   })
-}
-
-function playNextInQueue(): void {
-  audioPlaying = false
-  if (audioQueue.length === 0) return
-  const next = audioQueue.shift()!
-  audioPlaying = true
-  playAudioFile(next.filePath)
 }
 
 // ── Parse speech blocks ─────────────────────────────────────────────────
@@ -225,19 +249,10 @@ function connect(): void {
       case 'system_notification':
         // ── Streaming TTS: pre-download each sentence as it arrives ────
         if (msg.subtype === 'tts_chunk' && msg.data) {
-          const chunkJa: string = msg.data.ja ?? ''
-          // New TTS session → flush old queue
-          if (chunkJa && chunkJa !== lastTtsJa) {
-            lastTtsJa = chunkJa
-            audioQueue = []
-          }
-          console.log(C.dim + `\n🔊 句子 ${msg.data.chunkIndex + 1} 已就绪` + C.reset)
           enqueueChunk(msg.data.audioUrl)
         }
         // ── Legacy: full-file TTS (backward compat) ────────────────────
         else if (msg.subtype === 'tts_ready' && msg.data) {
-          console.log(C.dim + `\n🔊 播放中...` + C.reset)
-          console.log()
           enqueueChunk(msg.data.audioUrl)
         }
         break
@@ -279,6 +294,7 @@ rl.on('line', (line: string) => {
   }
   if (text === '/quit' || text === '/exit') {
     console.log('再见~')
+    killPlayer()
     if (ws) ws.close()
     rl.close()
     process.exit(0)
@@ -288,6 +304,7 @@ rl.on('line', (line: string) => {
 
 rl.on('SIGINT', () => {
   console.log('\n再见~')
+  killPlayer()
   if (ws) ws.close()
   rl.close()
   process.exit(0)
