@@ -34,6 +34,12 @@ pub enum EventType {
     Other(String),
 }
 
+impl Default for EventType {
+    fn default() -> Self {
+        EventType::System
+    }
+}
+
 impl Serialize for EventType {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let str = match self {
@@ -97,6 +103,12 @@ pub enum RelationType {
     References,
 }
 
+impl Default for RelationType {
+    fn default() -> Self {
+        RelationType::RelatedTo
+    }
+}
+
 impl Serialize for RelationType {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let str = match self {
@@ -118,17 +130,22 @@ impl Serialize for RelationType {
 impl<'de> Deserialize<'de> for RelationType {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
-        Ok(match s.as_str() {
-            "precedes" => RelationType::Precedes,
+        let lower = s.to_lowercase();
+        Ok(match lower.as_str() {
+            "precedes" | "temporal" => RelationType::Precedes,
             "leads_to" => RelationType::LeadsTo,
             "because_of" => RelationType::BecauseOf,
             "enables" => RelationType::Enables,
             "prevents" => RelationType::Prevents,
             "response_to" => RelationType::ResponseTo,
-            "related_to" => RelationType::RelatedTo,
+            "related_to" | "semantic" => RelationType::RelatedTo,
             "similar_to" => RelationType::SimilarTo,
             "part_of" => RelationType::PartOf,
-            "references" => RelationType::References,
+            "references" | "entity" => RelationType::References,
+            "mentioned_in" | "contains" => {
+                // 旧数据中的非标准关系类型，忽略
+                return Ok(RelationType::RelatedTo);
+            }
             other => {
                 tracing::warn!("未知关系类型: {other}，视为 related_to");
                 RelationType::RelatedTo
@@ -138,21 +155,25 @@ impl<'de> Deserialize<'de> for RelationType {
 }
 
 /// 事件节点 — 记忆的基本单位
+///
+/// 兼容 TS 旧数据格式（rawText, eventType, sessionId）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventNode {
     /// 唯一 ID
     pub id: EventId,
-    /// 事件文本内容
+    /// 事件文本内容（兼容旧名 rawText）
+    #[serde(alias = "rawText")]
     pub text: String,
-    /// 事件类型
+    /// 事件类型（兼容旧名 eventType，旧数据可能没有此字段）
+    #[serde(default, alias = "eventType")]
     pub event_type: EventType,
     /// 时间戳
     pub timestamp: Timestamp,
     /// 提取的关键词列表
     #[serde(default)]
     pub keywords: Vec<String>,
-    /// 关联的会话 ID
-    #[serde(default)]
+    /// 关联的会话 ID（兼容旧名 sessionId）
+    #[serde(default, alias = "sessionId")]
     pub session_id: Option<String>,
     /// 关联的实体名
     #[serde(default)]
@@ -163,22 +184,31 @@ pub struct EventNode {
 }
 
 /// 图边 — 连接两个事件节点
+///
+/// 兼容 TS 旧数据格式（sourceId, targetId, subtype, weight）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Edge {
-    /// 源节点 ID
+    /// 源节点 ID（兼容旧名 sourceId）
+    #[serde(alias = "sourceId")]
     pub source: EventId,
-    /// 目标节点 ID
+    /// 目标节点 ID（兼容旧名 targetId）
+    #[serde(alias = "targetId")]
     pub target: EventId,
-    /// 关系类型
+    /// 关系类型（旧数据用 subtype 字段）
+    #[serde(default, alias = "subtype")]
     pub relation: RelationType,
-    /// 置信度 [0.0, 1.0]
+    /// 置信度 [0.0, 1.0]（旧数据用 weight）
+    #[serde(default = "default_confidence", alias = "weight")]
     pub confidence: f64,
     /// 边创建时间
+    #[serde(default)]
     pub timestamp: Timestamp,
     /// 推理依据文本
     #[serde(default)]
     pub reason: Option<String>,
 }
+
+fn default_confidence() -> f64 { 1.0 }
 
 /// FastPath 配置
 #[derive(Debug, Clone)]

@@ -1,0 +1,16 @@
+[server]
+host = "127.0.0.1"
+port = 3456
+
+[llm]
+api_key = ""
+base_url = "https://api.deepseek.com/anthropic"
+model = "deepseek-v4-flash"
+
+[memory]
+dir = "data/memory"
+
+[tts]
+enabled = false
+base_url = "http://127.0.0.1:9880"
+voice = "可琳"

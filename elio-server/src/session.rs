@@ -1,0 +1,52 @@
+//! 会话管理 — 持有 MainLoop 实例
+
+use elio_core::mainloop::{MainLoopConfig, MainLoop};
+use elio_core::memory::MemorySystem;
+use elio_core::llm::DeepSeekClient;
+use tokio::sync::Mutex;
+
+/// 单个会话
+pub struct Session {
+    pub inner: Mutex<MainLoop>,
+}
+
+impl Session {
+    pub fn new(config: MainLoopConfig, memory: Box<dyn MemorySystem>) -> Self {
+        let api_key = std::env::var("ANTHROPIC_AUTH_TOKEN")
+            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
+            .unwrap_or_default();
+
+        let llm = Box::new(DeepSeekClient::new(
+            api_key,
+            config.llm_base_url.clone(),
+            config.model.clone(),
+        ));
+
+        Session {
+            inner: Mutex::new(MainLoop::new(config, llm, memory)),
+        }
+    }
+}
+
+/// 会话管理器 — 目前只维护一个默认会话
+pub struct SessionManager {
+    sessions: Vec<Session>,
+}
+
+impl SessionManager {
+    pub fn new() -> Self {
+        Self {
+            sessions: Vec::new(),
+        }
+    }
+
+    pub fn create_default(&mut self, config: MainLoopConfig, memory: Box<dyn MemorySystem>) -> &Session {
+        tracing::info!("创建默认会话");
+        self.sessions.push(Session::new(config, memory));
+        self.sessions.last().unwrap()
+    }
+
+    pub fn get_default(&self) -> Option<&Session> {
+        self.sessions.first()
+    }
+}

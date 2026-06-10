@@ -129,7 +129,8 @@ impl FastPath {
         let mut parts = Vec::new();
         for event in &recent {
             let text_preview = if event.text.len() > 60 {
-                format!("{}...", &event.text[..60])
+                let truncated: String = event.text.chars().take(60).collect();
+                format!("{truncated}...")
             } else {
                 event.text.clone()
             };

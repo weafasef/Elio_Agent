@@ -14,6 +14,8 @@ pub struct MainLoopConfig {
     pub heartbeat_secs: u64,
     /// LLM model name
     pub model: String,
+    /// LLM API base URL
+    pub llm_base_url: String,
     /// Max tokens per response
     pub max_tokens: u32,
     /// System prompt (完整文本，由 PromptManager 组装)
@@ -25,6 +27,7 @@ impl Default for MainLoopConfig {
         Self {
             heartbeat_secs: 30,
             model: "deepseek-v4-flash".into(),
+            llm_base_url: "https://api.deepseek.com/anthropic".into(),
             max_tokens: 4096,
             system_prompt: String::new(),
         }

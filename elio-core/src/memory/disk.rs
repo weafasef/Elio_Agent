@@ -71,7 +71,8 @@ impl DiskIO {
             match serde_json::from_str::<EventNode>(line) {
                 Ok(event) => events.push(event),
                 Err(e) => {
-                    error!("解析事件行失败: {e} — line: {}", &line[..line.len().min(100)]);
+                    let preview: String = line.chars().take(100).collect();
+                    error!("解析事件行失败: {e} — line: {preview}");
                 }
             }
         }
