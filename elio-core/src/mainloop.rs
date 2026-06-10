@@ -144,6 +144,17 @@ impl MainLoop {
         self.state = LoopState::Thinking;
     }
 
+    /// 定时心跳 tick（每 30s 调用）
+    ///
+    /// 推送 Timer 感知 + 系统消息到对话历史，让 Elio 感知时间流逝。
+    /// 这样 step() 不会跳过，Elio 可以主动说话。
+    pub fn on_timer_tick(&mut self) {
+        self.worldview.push("定时心跳 — 30秒已过去", PerceptSource::Timer);
+        // 加入系统消息触发 step
+        self.conversation.add_user_message("<system tick>");
+        self.state = LoopState::Thinking;
+    }
+
     /// 执行一步 MainLoop tick
     pub async fn step(&mut self) -> StepResult {
         if self.conversation.messages.is_empty() {

@@ -83,22 +83,40 @@ async fn main() -> anyhow::Result<()> {
     };
     session_mgr.create_default(mainloop_config, Box::new(graph_memory));
 
-    // 心跳任务（30s 记忆维护）
-    tokio::spawn(async {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
-        loop {
-            interval.tick().await;
-            tracing::debug!("heartbeat tick");
-        }
-    });
-
-    // 提取地址信息（先于 with_state 移动 app_state）
+    // 提取地址信息
     let addr = format!("{}:{}", config.server.host, config.server.port);
 
     // 构建 axum 路由
     let app_state = Arc::new(AppState {
         session_mgr,
         config,
+    });
+
+    // 心跳任务（每 30s 推送 Timer 感知 + 记忆维护）
+    let heartbeat_state = Arc::clone(&app_state);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            tracing::debug!("heartbeat tick");
+
+            if let Some(session) = heartbeat_state.session_mgr.get_default() {
+                let mut guard = session.inner.lock().await;
+                guard.on_timer_tick();
+                // 释放锁后 step（避免长时间持有）
+                drop(guard);
+
+                // 执行 step（现在对话有 <system tick>，不会跳过）
+                let mut guard = session.inner.lock().await;
+                let result = guard.step().await;
+                match result {
+                    elio_core::mainloop::StepResult::Response(_) => {
+                        tracing::info!("Elio 主动说话（定时心跳触发）");
+                    }
+                    _ => {}
+                }
+            }
+        }
     });
 
     let app = routes::create_routes()
