@@ -153,8 +153,8 @@ impl MainLoop {
 
         self.worldview.commit_slice();
 
-        // 构建系统提示词（世界观注入 + 记忆上下文）
-        let worldview_text = self.worldview.format_for_worldview(3);
+        // 构建系统提示词（世界观注入 — 时间/运行时长/外部感知 + 记忆上下文）
+        let worldview_text = self.worldview.build_worldview();
         let mut system_prompt = self.config.system_prompt.clone();
         if !worldview_text.is_empty() {
             system_prompt.push_str("\n\n");

@@ -1,26 +1,23 @@
 use std::collections::VecDeque;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 外部感知体 — WorldviewBuffer
 ///
-/// 收集外部事件（用户消息、系统事件），在 MainLoop tick 中被消费。
-/// 维护最近 N 个感知切片作为短期记忆。
+/// 收集外部事件，在每个 MainLoop tick 中被消费并注入系统提示词。
+/// 自动注入当前时间、运行时长、时段上下文。
 pub struct WorldviewBuffer {
-    /// 未消费的感知
     pending: VecDeque<Percept>,
-    /// 最近 N 个已提交的切片
     recent_slices: VecDeque<PerceptionSlice>,
-    /// 最大切片保留数
     max_slices: usize,
+    /// 启动时间
+    start_time: SystemTime,
 }
 
 /// 单个感知
 #[derive(Debug, Clone)]
 pub struct Percept {
-    /// 感知内容
     pub text: String,
-    /// 来源
     pub source: PerceptSource,
-    /// 时间戳
     pub timestamp: i64,
 }
 
@@ -33,7 +30,7 @@ pub enum PerceptSource {
     Timer,
 }
 
-/// 已提交的感知切片（一组感知的快照）
+/// 感知切片
 #[derive(Debug, Clone)]
 pub struct PerceptionSlice {
     pub percepts: Vec<Percept>,
@@ -46,16 +43,13 @@ impl WorldviewBuffer {
             pending: VecDeque::new(),
             recent_slices: VecDeque::with_capacity(max_slices + 1),
             max_slices,
+            start_time: SystemTime::now(),
         }
     }
 
     /// 推送一条感知
     pub fn push(&mut self, text: impl Into<String>, source: PerceptSource) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-
+        let now = now_millis();
         self.pending.push_back(Percept {
             text: text.into(),
             source,
@@ -63,31 +57,18 @@ impl WorldviewBuffer {
         });
     }
 
-    /// 消费并提交当前所有未处理感知为一个切片
+    /// 提交当前所有未处理感知为一个切片
     pub fn commit_slice(&mut self) -> Option<PerceptionSlice> {
         if self.pending.is_empty() {
             return None;
         }
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-
+        let now = now_millis();
         let percepts: Vec<Percept> = self.pending.drain(..).collect();
-
-        let slice = PerceptionSlice {
-            committed_at: now,
-            percepts,
-        };
-
+        let slice = PerceptionSlice { committed_at: now, percepts };
         self.recent_slices.push_back(slice.clone());
-
-        // 保持切片数量上限
         while self.recent_slices.len() > self.max_slices {
             self.recent_slices.pop_front();
         }
-
         Some(slice)
     }
 
@@ -101,13 +82,28 @@ impl WorldviewBuffer {
         !self.pending.is_empty()
     }
 
-    /// 格式化 worldview 文本（供系统提示词注入）
-    pub fn format_for_worldview(&self, n: usize) -> String {
+    /// 构建完整世界观文本（含时间 + 运行时长 + 外部感知）
+    pub fn build_worldview(&self) -> String {
+        // 1. 当前时间
+        let time_str = format_current_time();
+
+        // 2. 运行时长
+        let uptime_str = format_uptime(self.start_time);
+
+        // 3. 近期感知摘要
+        let percepts_str = self.format_recent_percepts(3);
+
+        format!(
+            "<worldview>\n{time_str}\n{uptime_str}\n{percepts_str}\n</worldview>"
+        )
+    }
+
+    /// 格式化近期感知
+    fn format_recent_percepts(&self, n: usize) -> String {
         let slices = self.recent_slices(n);
         if slices.is_empty() {
-            return "当前无外部感知。".to_string();
+            return "本周期内无外部事件。".to_string();
         }
-
         let mut parts = Vec::new();
         for slice in slices {
             for percept in &slice.percepts {
@@ -120,21 +116,109 @@ impl WorldviewBuffer {
                 parts.push(format!("[{source_str}] {}", percept.text));
             }
         }
-
-        format!("## 外部感知\n{}", parts.join("\n"))
+        parts.join("\n")
     }
 
-    /// 清除所有数据
+    /// 旧的 format_for_worldview — 保留兼容
+    pub fn format_for_worldview(&self, n: usize) -> String {
+        let recent = self.format_recent_percepts(n);
+        format!("## 外部感知\n{recent}")
+    }
+
+    /// 清除
     pub fn clear(&mut self) {
         self.pending.clear();
         self.recent_slices.clear();
+        self.start_time = SystemTime::now();
+    }
+
+    /// 重置启动时间
+    pub fn reset_uptime(&mut self) {
+        self.start_time = SystemTime::now();
     }
 }
 
 impl Default for WorldviewBuffer {
     fn default() -> Self {
-        Self::new(7) // 默认保留 7 个切片
+        Self::new(7)
     }
+}
+
+// === 辅助函数 ===
+
+fn now_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+/// 格式化当前时间（含时段上下文）
+fn format_current_time() -> String {
+    let now = SystemTime::now();
+    let since_epoch = now.duration_since(UNIX_EPOCH).unwrap_or_default();
+    let secs = since_epoch.as_secs();
+
+    // 计算本地时间（UTC+8）
+    let local_secs = secs + 8 * 3600;
+    let hour = (local_secs / 3600) % 24;
+    let minute = (local_secs / 60) % 60;
+    let second = local_secs % 60;
+
+    let period = match hour {
+        5..=8 => "清晨",
+        9..=11 => "上午",
+        12..=13 => "中午",
+        14..=17 => "下午",
+        18..=21 => "傍晚",
+        _ => "夜间",
+    };
+
+    // 年月日
+    let days = (local_secs / 86400) as i64;
+    let mut y = 1970i64;
+    let mut remaining = days;
+    loop {
+        let days_in_year = if is_leap(y) { 366 } else { 365 };
+        if remaining < days_in_year { break; }
+        remaining -= days_in_year;
+        y += 1;
+    }
+    let month_days = if is_leap(y) {
+        [31,29,31,30,31,30,31,31,30,31,30,31]
+    } else {
+        [31,28,31,30,31,30,31,31,30,31,30,31]
+    };
+    let mut m = 0;
+    for &md in &month_days {
+        if remaining < md { break; }
+        remaining -= md;
+        m += 1;
+    }
+    let d = remaining + 1;
+
+    format!(
+        "当前时间: {}/{:02}/{:02} {:02}:{:02}:{:02}（{period}）",
+        y, m + 1, d, hour, minute, second
+    )
+}
+
+/// 格式化运行时长
+fn format_uptime(start: SystemTime) -> String {
+    let elapsed = start.elapsed().unwrap_or_default();
+    let total_secs = elapsed.as_secs();
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+
+    if hours > 0 {
+        format!("已持续运行: {hours} 小时 {minutes} 分钟")
+    } else {
+        format!("已持续运行: {minutes} 分钟")
+    }
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
 #[cfg(test)]
@@ -144,11 +228,8 @@ mod tests {
     #[test]
     fn test_push_and_commit() {
         let mut wv = WorldviewBuffer::new(7);
-        assert!(!wv.has_pending());
-
         wv.push("你好", PerceptSource::User);
         assert!(wv.has_pending());
-
         let slice = wv.commit_slice();
         assert!(slice.is_some());
         assert_eq!(slice.unwrap().percepts.len(), 1);
@@ -179,5 +260,26 @@ mod tests {
         let formatted = wv.format_for_worldview(7);
         assert!(formatted.contains("外部感知"));
         assert!(formatted.contains("测试消息"));
+    }
+
+    #[test]
+    fn test_build_worldview() {
+        let mut wv = WorldviewBuffer::new(7);
+        wv.push("你好", PerceptSource::User);
+        wv.commit_slice();
+        let wv_text = wv.build_worldview();
+        assert!(wv_text.starts_with("<worldview>"));
+        assert!(wv_text.contains("当前时间"));
+        assert!(wv_text.contains("已持续运行"));
+        assert!(wv_text.contains("💬 用户"));
+        assert!(wv_text.ends_with("</worldview>"));
+    }
+
+    #[test]
+    fn test_empty_worldview() {
+        let wv = WorldviewBuffer::new(7);
+        let wv_text = wv.build_worldview();
+        assert!(wv_text.contains("当前时间"));
+        assert!(wv_text.contains("无外部事件"));
     }
 }

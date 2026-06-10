@@ -2,3 +2,4 @@ target/
 Cargo.lock
 *.pyc
 __pycache__/
+elio-server/config/default.toml
