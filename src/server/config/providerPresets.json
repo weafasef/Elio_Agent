@@ -19,10 +19,10 @@
     "baseUrl": "https://api.deepseek.com/anthropic",
     "apiFormat": "anthropic",
     "defaultModels": {
-      "main": "deepseek-v4-pro",
+      "main": "deepseek-v4-flash",
       "haiku": "deepseek-v4-flash",
-      "sonnet": "deepseek-v4-pro",
-      "opus": "deepseek-v4-pro"
+      "sonnet": "deepseek-v4-flash",
+      "opus": "deepseek-v4-flash"
     },
     "needsApiKey": true,
     "websiteUrl": "https://platform.deepseek.com",
