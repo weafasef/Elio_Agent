@@ -126,6 +126,10 @@ export const MainLoop = {
 function buildWorldview(): string {
   const percepts = WorldviewBuffer.drain()
 
+  // ── 短期记忆：写入感知环 ──────────────────────────────────────────────
+  WorldviewBuffer.commitSlice(percepts)
+  const recentSlices = WorldviewBuffer.getRecentSlices()
+
   const now = new Date()
   const timeStr = now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
   const hour = now.getHours()
@@ -145,12 +149,20 @@ function buildWorldview(): string {
     '已持续运行: ' + elapsedMin + ' 分钟',
   ]
 
+  // ── 近期感知流（短期记忆，最近7条） ──────────────────────────────────
+  if (recentSlices.length > 0) {
+    parts.push('')
+    parts.push('--- 近期感知流（最近 ' + recentSlices.length + ' 个时间片） ---')
+    for (const slice of recentSlices) {
+      parts.push(slice.summary)
+    }
+  }
+
+  // ── 本周期事件详情 ───────────────────────────────────────────────────
   if (percepts.length > 0) {
     parts.push('')
-    parts.push('--- 本周期内的外部事件 ---')
+    parts.push('--- 本周期内的外部事件（详情） ---')
     parts.push(WorldviewBuffer.formatForWorldview(percepts))
-  } else {
-    parts.push('本周期内无外部事件。')
   }
 
   if (lastElioOutput) {
