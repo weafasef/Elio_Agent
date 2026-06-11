@@ -11,8 +11,10 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use config::Config;
-use elio_core::memory::{GraphMemorySystem, MemorySystem};
+use elio_core::memory::{GraphMemorySystem, MemoryEvent, MemorySystem};
 use elio_core::prompt::PromptManager;
+use elio_core::tool::{ToolContentBlock, ToolContext};
+use elio_core::worldview::PerceptSource;
 use session::SessionManager;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -124,47 +126,103 @@ async fn main() -> anyhow::Result<()> {
             guard.on_timer_tick();
             drop(guard);
 
-            // 2. 执行 step()，处理 tool_use 递归
-            // 内层循环：LLM 可能连续返回多个 tool_use
-            loop {
+            // 2. 单次 step（工具异步执行，不阻塞心跳）
+            // 用块作用域控制 guard 生命周期，ToolCall 分支提取所需数据后释放锁
+            let step_result = {
                 let mut guard = session.inner.lock().await;
                 let result = guard.step().await;
                 match result {
-                    elio_core::mainloop::StepResult::Response(text) => {
-                        tracing::info!("Elio 回复: {:.100}", text);
-                        // 发送 WS 协议消息
-                        let start = serde_json::json!({"type": "content_start", "blockType": "text"});
-                        let delta = serde_json::json!({"type": "content_delta", "text": text});
-                        let complete = serde_json::json!({
-                            "type": "message_complete",
-                            "usage": {"input_tokens": 0, "output_tokens": 0}
+                    elio_core::mainloop::StepResult::ToolCall(ref name, ..) => {
+                        guard.worldview.push(
+                            format!("工具 {name} 已提交，等待结果..."),
+                            PerceptSource::ToolResult,
+                        );
+                    }
+                    _ => {}
+                }
+                result
+            }; // guard 在此释放
+
+            match step_result {
+                elio_core::mainloop::StepResult::Response(text) => {
+                    tracing::info!("Elio 回复: {:.100}", text);
+                    let start = serde_json::json!({"type": "content_start", "blockType": "text"});
+                    let delta = serde_json::json!({"type": "content_delta", "text": text});
+                    let complete = serde_json::json!({
+                        "type": "message_complete",
+                        "usage": {"input_tokens": 0, "output_tokens": 0}
+                    });
+                    let _ = heartbeat_tx.send(start.to_string());
+                    let _ = heartbeat_tx.send(delta.to_string());
+                    let _ = heartbeat_tx.send(complete.to_string());
+                }
+                elio_core::mainloop::StepResult::ToolCall(name, input, id) => {
+                    tracing::info!("Elio 调用工具: {name}");
+                    let tool = {
+                        let guard = session.inner.lock().await;
+                        guard.tools.get(&name).cloned()
+                    };
+                    if let Some(tool) = tool {
+                        let ctx = ToolContext {
+                            cwd: std::env::current_dir().unwrap_or_default(),
+                            session_id: "elio".into(),
+                            user_message: None,
+                        };
+                        let logger = {
+                            let guard = session.inner.lock().await;
+                            guard.logger.clone()
+                        };
+                        let session = session.clone();
+                        let tx = heartbeat_tx.clone();
+                        tokio::spawn(async move {
+                            let start = std::time::Instant::now();
+                            let result = tool.execute(input, ctx).await;
+                            let elapsed = start.elapsed();
+
+                            let result_text = result
+                                .content
+                                .iter()
+                                .map(|b| match b {
+                                    ToolContentBlock::Text { text } => text.clone(),
+                                    ToolContentBlock::Image { .. } => "[图片]".into(),
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+
+                            let mut guard = session.inner.lock().await;
+                            guard.conversation.add_tool_result(id.clone(), result_text.clone(), result.is_error);
+                            guard.worldview.push(
+                                format!("工具 {name} 已执行完毕（耗时 {:.1}s）", elapsed.as_secs_f64()),
+                                PerceptSource::ToolResult,
+                            );
+                            let status = if result.is_error { "失败" } else { "成功" };
+                            guard.memory.record_event(MemoryEvent {
+                                text: format!("工具 {name} 执行{status}: {result_text}"),
+                                event_type: elio_core::memory::EventType::ToolResult,
+                                session_id: None,
+                            });
+                            logger.log(
+                                elio_core::log::EVENT_API_REQUEST,
+                                &format!("工具 {name} 执行完毕（{:.1}s）", elapsed.as_secs_f64()),
+                                Some("system"),
+                            );
+                            let _ = tx.send(serde_json::json!({
+                                "type": "tool_complete",
+                                "tool": name,
+                                "elapsed": elapsed.as_secs_f64(),
+                            }).to_string());
                         });
-                        let _ = heartbeat_tx.send(start.to_string());
-                        let _ = heartbeat_tx.send(delta.to_string());
-                        let _ = heartbeat_tx.send(complete.to_string());
-                        break;
                     }
-                    elio_core::mainloop::StepResult::ToolCall(name, input, id) => {
-                        tracing::info!("Elio 调用工具: {name}");
-                        // 执行工具，递归 step()
-                        drop(guard);
-                        let mut guard = session.inner.lock().await;
-                        let _ = guard.execute_tool(&name, input, &id).await;
-                        // 继续循环，处理 tool result 后的下一步
-                    }
-                    elio_core::mainloop::StepResult::Idle => {
-                        break;
-                    }
-                    elio_core::mainloop::StepResult::Error(e) => {
-                        tracing::warn!("Elio step 错误: {e}");
-                        let error = serde_json::json!({
-                            "type": "error",
-                            "message": e,
-                            "code": "LLM_ERROR"
-                        });
-                        let _ = heartbeat_tx.send(error.to_string());
-                        break;
-                    }
+                }
+                elio_core::mainloop::StepResult::Idle => {}
+                elio_core::mainloop::StepResult::Error(e) => {
+                    tracing::warn!("Elio step 错误: {e}");
+                    let error = serde_json::json!({
+                        "type": "error",
+                        "message": e,
+                        "code": "LLM_ERROR"
+                    });
+                    let _ = heartbeat_tx.send(error.to_string());
                 }
             }
 
@@ -201,7 +259,7 @@ async fn ws_handler(
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>, rx: tokio::sync::broadcast::Receiver<String>) {
     // 获取默认会话
     if let Some(session) = state.session_mgr.get_default() {
-        ws::handle_ws(socket, session, rx).await;
+        ws::handle_ws(socket, &session, rx).await;
     } else {
         tracing::error!("没有可用会话");
     }

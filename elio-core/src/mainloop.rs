@@ -255,8 +255,8 @@ impl MainLoop {
         StepResult::Idle
     }
 
-    /// 执行工具并将结果送回 LLM
-    pub async fn execute_tool(&mut self, name: &str, input: serde_json::Value, tool_call_id: &str) -> StepResult {
+    /// 执行工具并将结果记录到 conversation + worldview（不调 step，由心跳循环驱动）
+    pub async fn execute_tool(&mut self, name: &str, input: serde_json::Value, tool_call_id: &str) {
         let ctx = ToolContext {
             cwd: std::env::current_dir().unwrap_or_default(),
             session_id: "elio".into(),
@@ -276,14 +276,17 @@ impl MainLoop {
 
         self.conversation.add_tool_result(tool_call_id.to_string(), result_text.clone(), result.is_error);
 
+        self.worldview.push(
+            format!("工具 {name} 已执行完毕"),
+            PerceptSource::ToolResult,
+        );
+
         let status = if result.is_error { "失败" } else { "成功" };
         self.memory.record_event(MemoryEvent {
             text: format!("工具 {name} 执行{status}: {result_text}"),
             event_type: crate::memory::EventType::ToolResult,
             session_id: None,
         });
-
-        Box::pin(self.step()).await
     }
 
     /// 定时记忆维护 tick

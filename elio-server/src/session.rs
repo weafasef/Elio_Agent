@@ -32,7 +32,7 @@ impl Session {
 
 /// 会话管理器 — 目前只维护一个默认会话
 pub struct SessionManager {
-    sessions: Vec<Session>,
+    sessions: Vec<Arc<Session>>,
 }
 
 impl SessionManager {
@@ -42,13 +42,14 @@ impl SessionManager {
         }
     }
 
-    pub fn create_default(&mut self, config: MainLoopConfig, memory: Box<dyn MemorySystem>, logger: Arc<AuditLogger>) -> &Session {
+    pub fn create_default(&mut self, config: MainLoopConfig, memory: Box<dyn MemorySystem>, logger: Arc<AuditLogger>) -> Arc<Session> {
         tracing::info!("创建默认会话");
-        self.sessions.push(Session::new(config, memory, logger));
-        self.sessions.last().unwrap()
+        let session = Arc::new(Session::new(config, memory, logger));
+        self.sessions.push(session.clone());
+        session
     }
 
-    pub fn get_default(&self) -> Option<&Session> {
-        self.sessions.first()
+    pub fn get_default(&self) -> Option<Arc<Session>> {
+        self.sessions.first().cloned()
     }
 }
