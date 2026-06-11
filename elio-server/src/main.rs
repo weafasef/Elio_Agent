@@ -150,6 +150,8 @@ async fn main() -> anyhow::Result<()> {
 
             // 2. 单次 step（流式 — 逐 delta 实时广播文本到客户端）
             // 用块作用域控制 guard 生命周期，ToolCall 分支提取所需数据后释放锁
+            // Phase 2 标记：</ja> 提前 TTS 是否已启动（跨 guard 块使用）
+            let tts_started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let step_result = {
                 let mut guard = session.inner.lock().await;
 
@@ -164,7 +166,15 @@ async fn main() -> anyhow::Result<()> {
                 let s = stripper.clone();
                 let tx = heartbeat_tx.clone();
 
+                // Phase 2: 检测 </ja> 提前启动 TTS（不等完整回复）
+                let tts_flag = tts_started.clone();
+                let full_raw = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+                let raw_buf = full_raw.clone();
+                let tts_svc = heartbeat_tts.clone();
+                let tx_tts = heartbeat_tx.clone();
+
                 let result = guard.step_stream(move |delta_text| {
+                    // Phase 1: 显示文本（剥离 think 块）
                     let clean = s.lock().unwrap().feed(delta_text);
                     if !clean.is_empty() {
                         let _ = tx.send(
@@ -173,6 +183,55 @@ async fn main() -> anyhow::Result<()> {
                                 "delta": {"text": clean}
                             }).to_string()
                         );
+                    }
+
+                    // Phase 2: 累积原始文本，检测 </ja> 提前 TTS
+                    let mut raw = raw_buf.lock().unwrap();
+                    raw.push_str(delta_text);
+                    if !tts_flag.load(std::sync::atomic::Ordering::Relaxed)
+                        && raw.contains("</ja>")
+                    {
+                        if let Some(ja_text) = raw.split("<ja>").nth(1)
+                            .and_then(|s| s.split("</ja>").next())
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                        {
+                            tts_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                            tracing::info!("[TTS] 检测到 </ja>，提前合成: 「{:.60}」", ja_text);
+
+                            if let Some(tts) = tts_svc.as_ref() {
+                                let tts = tts.clone();
+                                let tx = tx_tts.clone();
+                                let ja_for_msg = ja_text.clone();
+                                // <emotion> 可能还没到，用默认值
+                                let emotion = "happy".to_string();
+                                // <zh> 可能也没到，用空
+                                let zh: String = String::new();
+                                tokio::spawn(async move {
+                                    let result = tts.synthesize_stream(
+                                        &ja_text,
+                                        &emotion,
+                                        move |wav_bytes, idx| {
+                                            let b64 = base64::engine::general_purpose::STANDARD
+                                                .encode(&wav_bytes);
+                                            let msg = serde_json::json!({
+                                                "type": "tts_chunk",
+                                                "data": b64,
+                                                "chunk_index": idx,
+                                                "format": "wav",
+                                                "text": ja_for_msg,
+                                                "subtitle": zh,
+                                            });
+                                            let _ = tx.send(msg.to_string());
+                                        },
+                                    ).await;
+                                    match result {
+                                        Ok(n) => tracing::info!("[TTS] 提前合成完成: {n} 个分片"),
+                                        Err(e) => tracing::warn!("[TTS] 提前合成失败: {e}"),
+                                    }
+                                });
+                            }
+                        }
                     }
                 }).await;
 
@@ -202,8 +261,10 @@ async fn main() -> anyhow::Result<()> {
                     );
 
                     // ── TTS 语音合成（后台异步，不阻塞心跳） ──────────────
+                    // Phase 2 如果已提前启动 TTS（检测到 </ja>），跳过旧路径避免重复
                     let tts_text = strip_think_tags(&text);
-                    if let Some(ref tts) = heartbeat_tts {
+                    if !tts_started.load(std::sync::atomic::Ordering::Relaxed)
+                        && let Some(ref tts) = heartbeat_tts {
                         if let Some(speech) = tts::parse_speech_blocks(&tts_text) {
                             let tts = tts.clone();
                             let tx = heartbeat_tx.clone();
