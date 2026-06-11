@@ -26,7 +26,22 @@ pub struct TtsConfig {
     pub enabled: bool,
     pub base_url: String,
     pub voice: String,
+    /// 默认情感（happy / sad / neutral / surprise ...）
+    #[serde(default = "default_emotion")]
+    pub default_emotion: String,
+    /// 参考音频目录（按 emotion 查找 .wav 文件）
+    pub ref_audio_dir: Option<String>,
+    /// TTS 合成语言（ja / zh）
+    #[serde(default = "default_lang")]
+    pub lang: String,
+    /// 是否启用流式合成
+    #[serde(default = "default_true")]
+    pub streaming: bool,
 }
+
+fn default_emotion() -> String { "happy".into() }
+fn default_lang() -> String { "ja".into() }
+fn default_true() -> bool { true }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {

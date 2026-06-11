@@ -301,6 +301,64 @@ step() 返回 ToolCall(name, input, id)
 
 ---
 
+## TTS 语音合成（GPT-SoVITS）
+
+当配置 `[tts].enabled = true` 时，elio-server 在收到 LLM 文本回复后会异步合成语音。
+
+### 流程
+
+```
+StepResult::Response(text)
+    │
+    ├── 广播文本回复（即时）            ← 客户端先显示文字
+    │
+    └── tts::parse_speech_blocks(text)
+          │
+          ├── None（无日文+无标签） → 不合成
+          │
+          └── Some(SpeechBlocks { ja, zh, emotion })
+                └── tokio::spawn 后台合成
+                      ├── GPT-SoVITS API 流式调用
+                      ├── 每句话 → on_chunk(wav_bytes, index)
+                      └── broadcast: tts_chunk → 客户端播放
+```
+
+LLM 回复可包含语音标签控制合成内容：
+
+```xml
+<emotion>happy</emotion>
+<ja>こんにちは、今日もいい天気ですね。</ja>
+<zh>你好，今天天气真好啊。</zh>
+```
+
+| 标签 | 用途 |
+|------|------|
+| `<ja>...</ja>` | 日文语音文本（合成用） |
+| `<zh>...</zh>` | 中文字幕（客户端显示） |
+| `<emotion>...</emotion>` | 情感（happy/sad/neutral/surprise...） |
+
+无标签时自动检测日文字符作为 fallback。
+
+### 参考音频
+
+在 `config/default.toml` 中配置参考音频目录：
+
+```toml
+[tts]
+enabled = true
+base_url = "http://127.0.0.1:9880"
+voice = "可琳"
+default_emotion = "happy"
+ref_audio_dir = "D:/VS_python/TTS/可琳/v4/可琳/reference_audios/中文/emotions"
+lang = "ja"
+streaming = true
+```
+
+参考音频按情感命名：`【开心】text.wav`、`【难过】text2.wav`。
+服务启动时自动扫描目录，建立 emotion → 参考音频映射，支持 fallback 链。
+
+---
+
 ## WebSocket 协议
 
 ### 客户端 → 服务端
@@ -312,7 +370,7 @@ step() 返回 ToolCall(name, input, id)
 
 ### 服务端 → 客户端（broadcast 推送）
 
-由心跳循环通过 `tokio::sync::broadcast` 推送（[main.rs:136-144](d:\VS_python\Elio_Agent_v2\elio-server\src\main.rs#L136)）：
+由心跳循环通过 `tokio::sync::broadcast` 推送（[main.rs](d:\VS_python\Elio_Agent_v2\elio-server\src\main.rs)）：
 
 ```
 LLM 回复文本:
@@ -323,9 +381,22 @@ LLM 回复文本:
 工具执行完成（后台异步）:
   {"type": "tool_complete", "tool": "search", "elapsed": 3.2}
 
+TTS 语音分片（后台异步）:
+  {"type": "tts_chunk", "data": "<base64 wav bytes>", "chunk_index": 0, "format": "wav",
+   "text": "こんにちは", "subtitle": "你好"}
+
 错误:
   {"type": "error", "message": "...", "code": "LLM_ERROR"}
 ```
+
+| type | 字段 | 说明 |
+|------|------|------|
+| `content_start` | `blockType` | 文本块开始 |
+| `content_delta` | `text` 或 `delta.text` | 回复增量 |
+| `message_complete` | `usage` | 消息结束 + token 统计 |
+| `tool_complete` | `tool`, `elapsed` | 工具执行完成 |
+| `tts_chunk` | `data`, `chunk_index`, `text`, `subtitle` | TTS 语音分片（base64 WAV） |
+| `error` | `message`, `code` | 错误通知 |
 
 ---
 

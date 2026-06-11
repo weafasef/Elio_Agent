@@ -20,6 +20,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
+use base64::Engine;
+
 /// 共享应用状态
 pub struct AppState {
     session_mgr: SessionManager,
@@ -105,9 +107,29 @@ async fn main() -> anyhow::Result<()> {
         response_tx: response_tx.clone(),
     });
 
+    // 初始化 TTS 服务（按配置启用）
+    // 注：config 已在 AppState 中，需要从 app_state 读取 tts 配置
+    let tts_service: Option<Arc<tts::TtsService>> = {
+        let tts_cfg = &app_state.config.tts;
+        if tts_cfg.enabled {
+            let svc = Arc::new(tts::TtsService::new(tts_cfg.clone()));
+            info!("TTS 服务已加载: {}", tts_cfg.base_url);
+
+            // 启动时检查 GPT-SoVITS 连接
+            let check = svc.is_available().await;
+            info!("GPT-SoVITS 连接检查: {}", if check { "✅ 可用" } else { "❌ 不可用" });
+
+            Some(svc)
+        } else {
+            info!("TTS 服务已禁用（enabled = false）");
+            None
+        }
+    };
+
     // 心跳任务（每 30s 推送 Timer 感知 + 调用 step() → 广播结果到所有 WS 客户端）
     let heartbeat_state = Arc::clone(&app_state);
     let heartbeat_tx = response_tx.clone();
+    let heartbeat_tts = tts_service.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
         // 首次 tick 立即触发，不需要等 30s
@@ -146,8 +168,11 @@ async fn main() -> anyhow::Result<()> {
             match step_result {
                 elio_core::mainloop::StepResult::Response(text) => {
                     tracing::info!("Elio 回复: {:.100}", text);
+
+                    // 去掉 <think> 思考块（只显示实际回复内容）
+                    let display_text = strip_think_tags(&text);
                     let start = serde_json::json!({"type": "content_start", "blockType": "text"});
-                    let delta = serde_json::json!({"type": "content_delta", "text": text});
+                    let delta = serde_json::json!({"type": "content_delta", "text": display_text});
                     let complete = serde_json::json!({
                         "type": "message_complete",
                         "usage": {"input_tokens": 0, "output_tokens": 0}
@@ -155,6 +180,44 @@ async fn main() -> anyhow::Result<()> {
                     let _ = heartbeat_tx.send(start.to_string());
                     let _ = heartbeat_tx.send(delta.to_string());
                     let _ = heartbeat_tx.send(complete.to_string());
+
+                    // ── TTS 语音合成（后台异步，不阻塞心跳） ──────────────
+                    let tts_text = strip_think_tags(&text);
+                    if let Some(ref tts) = heartbeat_tts {
+                        if let Some(speech) = tts::parse_speech_blocks(&tts_text) {
+                            let tts = tts.clone();
+                            let tx = heartbeat_tx.clone();
+                            let ja_text = speech.ja;
+                            let ja_for_msg = ja_text.clone();
+                            let zh_text = speech.zh;
+                            let emotion = speech.emotion;
+                            tokio::spawn(async move {
+                                tracing::info!("TTS 合成: emotion={emotion}, ja=「{:.60}」", ja_text);
+                                let result = tts.synthesize_stream(
+                                    &ja_text,
+                                    &emotion,
+                                    move |wav_bytes, idx| {
+                                        let b64 = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
+                                        tracing::debug!("[TTS] chunk {idx}: WAV {} 字节, base64 {} 字节",
+                                            wav_bytes.len(), b64.len());
+                                        let msg = serde_json::json!({
+                                            "type": "tts_chunk",
+                                            "data": b64,
+                                            "chunk_index": idx,
+                                            "format": "wav",
+                                            "text": ja_for_msg,
+                                            "subtitle": zh_text,
+                                        });
+                                        let _ = tx.send(msg.to_string());
+                                    },
+                                ).await;
+                                match result {
+                                    Ok(n) => tracing::info!("TTS 完成: {n} 个分片"),
+                                    Err(e) => tracing::warn!("TTS 合成失败: {e}"),
+                                }
+                            });
+                        }
+                    }
                 }
                 elio_core::mainloop::StepResult::ToolCall(name, input, id) => {
                     tracing::info!("Elio 调用工具: {name}");
@@ -299,4 +362,46 @@ fn resolve_logs_dir() -> PathBuf {
         return cwd_logs;
     }
     PathBuf::from("logs")
+}
+
+/// 去掉 <think>...</think> 思考块（保留其余文本）
+fn strip_think_tags(text: &str) -> String {
+    let mut result = String::new();
+    let mut in_think = false;
+    let mut i = 0;
+    let chars: Vec<char> = text.chars().collect();
+    while i < chars.len() {
+        if !in_think && i + 6 < chars.len()
+            && chars[i] == '<'
+            && chars[i+1] == 't'
+            && chars[i+2] == 'h'
+            && chars[i+3] == 'i'
+            && chars[i+4] == 'n'
+            && chars[i+5] == 'k'
+            && chars[i+6] == '>'
+        {
+            in_think = true;
+            i += 7;
+            continue;
+        }
+        if in_think && i + 8 < chars.len()
+            && chars[i] == '<'
+            && chars[i+1] == '/'
+            && chars[i+2] == 't'
+            && chars[i+3] == 'h'
+            && chars[i+4] == 'i'
+            && chars[i+5] == 'n'
+            && chars[i+6] == 'k'
+            && chars[i+7] == '>'
+        {
+            in_think = false;
+            i += 8;
+            continue;
+        }
+        if !in_think {
+            result.push(chars[i]);
+        }
+        i += 1;
+    }
+    result.trim().to_string()
 }
