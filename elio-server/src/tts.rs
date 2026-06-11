@@ -206,10 +206,9 @@ impl TtsService {
 
     /// 流式合成 — 每句话通过回调返回独立 WAV
     ///
-    /// GPT-SoVITS 流式响应格式：
-    ///   1. 先发 44 字节 WAV header
-    ///   2. 每句话一个 raw PCM chunk
-    /// 每段 PCM 需要拼上 WAV header 才形成有效 WAV 文件
+    /// 非流式模式: 直接调用 GPT-SoVITS HTTP API（保留原实现）
+    /// 流式模式:   调用 Bun 子进程 (tts-bridge.ts) 处理分片，
+    ///             利用 Bun fetch 保留 HTTP chunk 边界避免噪声。
     pub async fn synthesize_stream<F>(
         &self,
         text: &str,
@@ -219,6 +218,134 @@ impl TtsService {
     where
         F: Fn(Vec<u8>, usize) + Send + 'static,
     {
+        // ── 非流式: 直接 HTTP 请求 ──
+        if !self.config.streaming {
+            let wav = self.synthesize_inner(text, emotion).await?;
+            on_chunk(wav, 0);
+            return Ok(1);
+        }
+
+        // ── 流式: 调用 Bun 子进程 ──────────────────────────────────────────
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use base64::Engine;
+
+        let ref_audio = self.get_ref_audio(emotion).await;
+
+        // 构建传给 Bun 的 JSON 输入
+        let input = serde_json::json!({
+            "text": text,
+            "ref_audio_path": ref_audio.as_ref()
+                .map(|ra| ra.path.to_string_lossy().replace('\\', "/")),
+            "prompt_text": ref_audio.as_ref().map(|ra| ra.text.as_str()),
+            "prompt_lang": self.config.lang,
+            "lang": self.config.lang,
+        });
+
+        // 定位 Bun 脚本路径
+        let script_path = {
+            let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let p = manifest_dir.join("scripts/tts-bridge.ts");
+            if p.exists() { p } else {
+                // fallback: CWD 相对路径
+                std::env::current_dir()
+                    .unwrap_or_default()
+                    .join("scripts/tts-bridge.ts")
+            }
+        };
+        if !script_path.exists() {
+            return Err(TtsError::RequestFailed(
+                format!("Bun 脚本不存在: {:?}", script_path)
+            ));
+        }
+
+        // 启动 Bun 子进程
+        let mut child = tokio::process::Command::new("bun")
+            .arg("run")
+            .arg(script_path.to_string_lossy().as_ref())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .map_err(|e| TtsError::RequestFailed(format!("启动 Bun 失败: {e}")))?;
+
+        // 写入 stdin JSON 并关闭
+        if let Some(mut child_stdin) = child.stdin.take() {
+            child_stdin
+                .write_all(input.to_string().as_bytes())
+                .await
+                .map_err(|e| TtsError::RequestFailed(format!("写入 Bun stdin 失败: {e}")))?;
+            drop(child_stdin);
+        }
+
+        // 读取 stdout JSON lines
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| TtsError::RequestFailed("无法获取 Bun stdout".into()))?;
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
+        let mut chunk_count = 0;
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let json: serde_json::Value = serde_json::from_str(trimmed)
+                .map_err(|e| TtsError::RequestFailed(format!("解析 Bun 输出失败: {e}")))?;
+
+            match json["type"].as_str() {
+                Some("chunk") => {
+                    if let Some(data) = json["data"].as_str() {
+                        let index = json["index"].as_i64().unwrap_or(0) as usize;
+                        match base64::engine::general_purpose::STANDARD.decode(data) {
+                            Ok(wav_bytes) => {
+                                on_chunk(wav_bytes, index);
+                                chunk_count += 1;
+                            }
+                            Err(e) => {
+                                tracing::warn!("[TTS] base64 解码失败: {e}");
+                            }
+                        }
+                    }
+                }
+                Some("done") => {
+                    let count = json["count"].as_i64().unwrap_or(chunk_count as i64);
+                    debug!("[TTS] Bun 流式完成: {} 个分片", count);
+                    break;
+                }
+                Some("error") => {
+                    let msg = json["message"].as_str().unwrap_or("unknown error");
+                    return Err(TtsError::RequestFailed(format!("Bun TTS 错误: {msg}")));
+                }
+                _ => {
+                    debug!("[TTS] 忽略 Bun 输出: {}", trimmed);
+                }
+            }
+        }
+
+        // 等待 Bun 进程退出
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| TtsError::RequestFailed(format!("等待 Bun 退出失败: {e}")))?;
+
+        if !status.success() {
+            return Err(TtsError::RequestFailed(
+                format!("Bun 进程异常退出: {}", status),
+            ));
+        }
+
+        Ok(chunk_count)
+    }
+
+    /// 内部: 单次非流式 HTTP 合成
+    async fn synthesize_inner(
+        &self,
+        text: &str,
+        emotion: &str,
+    ) -> Result<Vec<u8>, TtsError> {
         let url = format!("{}/tts", self.config.base_url.trim_end_matches('/'));
 
         let ref_audio = self.get_ref_audio(emotion).await;
@@ -227,7 +354,7 @@ impl TtsService {
             "text": text,
             "text_lang": self.config.lang,
             "media_type": "wav",
-            "streaming_mode": self.config.streaming,
+            "streaming_mode": false,
         });
 
         if let Some(ref ra) = ref_audio {
@@ -236,7 +363,7 @@ impl TtsService {
             body["prompt_lang"] = serde_json::json!(self.config.lang);
         }
 
-        let mut resp = self
+        let resp = self
             .client
             .post(&url)
             .json(&body)
@@ -250,54 +377,13 @@ impl TtsService {
             return Err(TtsError::RequestFailed(format!("HTTP {status}: {err_text}")));
         }
 
-        // ── 流式读取 ──────────────────────────────────────────────────────
-        let mut wav_header: Option<Vec<u8>> = None;
-        let mut chunk_index = 0;
-
-        // 非流式模式：直接读取完整 body，作为单个 chunk 回调
-        if !self.config.streaming {
-            let all_bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| TtsError::RequestFailed(e.to_string()))?;
-            debug!("[TTS] 非流式响应: {} 字节", all_bytes.len());
-            on_chunk(all_bytes.to_vec(), 0);
-            return Ok(1);
-        }
-
-        while let Some(chunk) = resp
-            .chunk()
+        let bytes = resp
+            .bytes()
             .await
             .map_err(|e| TtsError::RequestFailed(e.to_string()))?
-        {
+            .to_vec();
 
-            // 第一块：包含 WAV header（44 字节） + 可能的首句 PCM
-            if wav_header.is_none() {
-                if chunk.len() < 44 {
-                    continue; // 等待足够数据
-                }
-                let header = chunk[..44].to_vec();
-                let pcm = chunk[44..].to_vec();
-                wav_header = Some(header);
-
-                if !pcm.is_empty() {
-                    let wav = Self::build_wav(&wav_header.as_ref().unwrap(), &pcm);
-                    on_chunk(wav, chunk_index);
-                    chunk_index += 1;
-                }
-                continue;
-            }
-
-            // 后续块：纯 PCM
-            if !chunk.is_empty() {
-                let wav = Self::build_wav(wav_header.as_ref().unwrap(), &chunk);
-                on_chunk(wav, chunk_index);
-                chunk_index += 1;
-            }
-        }
-
-        debug!("[TTS] 流式合成完成: {chunk_index} 个分片");
-        Ok(chunk_index)
+        Ok(bytes)
     }
 
     /// 用共享 WAV header 和 PCM 构建完整 WAV 文件字节

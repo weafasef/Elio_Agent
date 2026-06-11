@@ -69,11 +69,14 @@ elio/
 │           └── system.rs      # MemorySystem trait（可替换后端）
 ├── elio-server/               # HTTP + WebSocket 服务
 │   ├── config/default.toml    # 服务器配置
+│   ├── scripts/               # 辅助脚本（Bun TTS 桥接等）
+│   │   ├── tts-bridge.ts      # GPT-SoVITS 流式调用（保留 HTTP chunk 边界）
+│   │   └── test_input.json    # TTS 测试输入模板
 │   └── src/
 │       ├── main.rs            # 入口，axum 启动
 │       ├── ws.rs              # WebSocket 处理器
 │       ├── session.rs         # 会话管理
-│       ├── tts.rs             # TTS 语音服务
+│       ├── tts.rs             # TTS 语音服务（含 Bun 子进程调度）
 │       ├── config.rs          # 配置加载
 │       └── routes/            # REST API
 ├── elio-client/               # 终端聊天客户端
@@ -84,6 +87,22 @@ elio/
 ├── logs/                      # 审计日志目录
 │   └── logview_gui.py         # 日志查看 GUI
 └── data/memory/               # 记忆持久化目录
+```
+
+## 流式 TTS
+
+TTS 使用 GPT-SoVITS（本地 9880 端口）进行流式语音合成。
+
+- **流式合成**: 每句话作为一个独立 WAV 分片返回，边合成边播放，无需等待全文合成完毕
+- **Bun 桥接**: `scripts/tts-bridge.ts` 利用 Bun `fetch()` + Web Streams API 保留 HTTP chunk 原始边界，避免 Rust `reqwest` 合并 chunk 导致的噪声问题
+- **子进程模式**: Rust 服务器启动 Bun 子进程，通过 stdin/stdout JSON 行协议通信
+- **并行推理控制**: `parallel_infer: false` — 不切分子段，每句话一个完整 PCM chunk，确保播放干净
+- **时序**: 客户端收到首句 TTS chunk 后立即播放，同步显示中文字幕
+
+```bash
+# TTS 依赖（需要单独启动）
+cd D:\VS_python\TTS\GPT-SoVITS-1007-cu124
+runtime\python.exe api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
 ```
 
 ## 功能状态
@@ -101,7 +120,8 @@ elio/
 | 日志 GUI 查看器 | ✅ 完成 |
 | HTTP + WebSocket 服务 | ✅ 完成 |
 | 终端聊天客户端 | ✅ 完成 |
-| TTS 语音服务 (GPT-SoVITS) | 🔧 待接入 |
+| TTS 语音服务 (GPT-SoVITS) | ✅ 完成 |
+| TTS Bun 桥接 (流式分片) | ✅ 完成 |
 | 工具系统 (Shell/文件/Web) | 🔧 待实现 |
 | 飞书/钉钉/Telegram/微信适配器 | 📅 计划中 |
 
