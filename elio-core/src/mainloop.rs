@@ -137,16 +137,24 @@ impl MainLoop {
         }
     }
 
-    /// 处理用户消息
+    /// 处理用户消息（旧接口：加入 conversation + worldview + 记忆）
     pub fn on_user_message(&mut self, text: &str) {
         self.conversation.add_user_message(text);
+        self.on_user_perception(text);
+        self.state = LoopState::Thinking;
+    }
+
+    /// 处理用户感知（只推 worldview + 记忆，不加入 conversation）
+    ///
+    /// 用户消息作为「世界感知」存在，只在 30s 心跳时被 Elio 消费。
+    /// 不修改 conversation 历史，确保 Elio 只通过 heartbeat 回复。
+    pub fn on_user_perception(&mut self, text: &str) {
         self.memory.record_event(MemoryEvent {
             text: text.into(),
             event_type: crate::memory::EventType::UserMessage,
             session_id: Some(self.config.model.clone()),
         });
         self.worldview.push(text, PerceptSource::User);
-        self.state = LoopState::Thinking;
 
         // 日志
         self.logger.log(
@@ -192,10 +200,10 @@ impl MainLoop {
 
         self.state = LoopState::Thinking;
 
-        // 日志：记录发给 Elio 的提示词
+        // 日志：记录完整 prompt（身份 + 世界观 + 记忆上下文）
         self.logger.log(
             crate::log::EVENT_SYSTEM_PROMPT,
-            &format!("worldview:\n{worldview_text}\n\nmem_ctx:\n{mem_ctx}"),
+            &system_prompt,
             Some("system"),
         );
 

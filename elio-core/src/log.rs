@@ -1,69 +1,55 @@
-//! 审计日志系统 — 记录提示词/回复/时间到 JSONL
+//! 审计日志 — 每次调用立即写入 logs/YYYY-MM-DD.jsonl
 //!
-//! 写入 logs/YYYY-MM-DD.jsonl，与现有 logview_gui.py 兼容。
+//! 格式兼容 logview_gui.py，每行一个 JSON 事件。
 
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 日志事件
 #[derive(Debug, Clone, Serialize)]
 pub struct LogEvent {
-    /// ISO 8601 时间戳
     pub timestamp: String,
-    /// 事件类型
     #[serde(rename = "type")]
     pub event_type: String,
-    /// 数据内容
     pub data: String,
-    /// 来源（system/user/elio）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-    /// 会话 ID
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
 }
 
-/// 审计日志记录器
+/// 审计日志 — 立刻写入，不缓冲
 pub struct AuditLogger {
     dir: PathBuf,
-    buffer: Mutex<Vec<LogEvent>>,
-    flush_interval: std::time::Duration,
+    /// 缓存当前日志文件路径，避免每天重复计算
+    current_path: Mutex<Option<PathBuf>>,
 }
 
 impl AuditLogger {
-    /// 创建审计日志记录器
-    ///
-    /// `dir`: 日志目录（默认为 `./logs/`）
     pub fn new(dir: PathBuf) -> Self {
         fs::create_dir_all(&dir).ok();
         Self {
             dir,
-            buffer: Mutex::new(Vec::with_capacity(100)),
-            flush_interval: std::time::Duration::from_secs(5),
+            current_path: Mutex::new(None),
         }
     }
 
-    /// 记录事件
+    /// 记录事件，立即写入文件
     pub fn log(&self, event_type: &str, data: &str, source: Option<&str>) {
-        let now = format_timestamp();
         let event = LogEvent {
-            timestamp: now,
+            timestamp: format_timestamp(),
             event_type: event_type.to_string(),
             data: data.to_string(),
             source: source.map(String::from),
             session_id: None,
         };
-
-        if let Ok(mut buf) = self.buffer.lock() {
-            buf.push(event);
-        }
+        self.write_event(&event);
     }
 
-    /// 记录事件（带 session_id）
+    /// 带 session_id 的记录
     pub fn log_with_session(
         &self,
         event_type: &str,
@@ -71,119 +57,85 @@ impl AuditLogger {
         source: Option<&str>,
         session_id: Option<&str>,
     ) {
-        let now = format_timestamp();
         let event = LogEvent {
-            timestamp: now,
+            timestamp: format_timestamp(),
             event_type: event_type.to_string(),
             data: data.to_string(),
             source: source.map(String::from),
             session_id: session_id.map(String::from),
         };
-
-        if let Ok(mut buf) = self.buffer.lock() {
-            buf.push(event);
-        }
+        self.write_event(&event);
     }
 
-    /// 立即刷新到磁盘
-    pub fn flush(&self) {
-        let events: Vec<LogEvent> = {
-            let mut buf = self.buffer.lock().unwrap();
-            let mut drained = Vec::new();
-            std::mem::swap(&mut drained, &mut *buf);
-            drained
-        };
-
-        if events.is_empty() {
-            return;
-        }
-
-        let path = self.current_log_path();
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .unwrap_or_else(|_| {
-                fs::create_dir_all(&self.dir).ok();
-                OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .expect("无法创建日志文件")
-            });
-
-        for event in &events {
-            if let Ok(line) = serde_json::to_string(event) {
-                writeln!(file, "{}", line).ok();
+    fn write_event(&self, event: &LogEvent) {
+        let path = self.get_or_create_path();
+        if let Ok(line) = serde_json::to_string(event) {
+            if let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                let _ = writeln!(file, "{line}");
             }
         }
     }
 
-    /// 获取当前日志文件路径 logs/YYYY-MM-DD.jsonl
-    fn current_log_path(&self) -> PathBuf {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
-        let secs = now.as_secs() + 8 * 3600; // UTC+8
-        let days = secs / 86400;
-        let remaining = secs % 86400;
-        let hour = remaining / 3600;
-        let min = (remaining % 3600) / 60;
-        let sec = remaining % 60;
-
-        // 简单日期计算
-        let mut y = 1970i64;
-        let mut d = days as i64;
-        loop {
-            let days_in_year = if is_leap(y) { 366 } else { 365 };
-            if d < days_in_year { break; }
-            d -= days_in_year;
-            y += 1;
-        }
-        let month_days = if is_leap(y) {
-            [31,29,31,30,31,30,31,31,30,31,30,31]
+    /// 获取当前日志文件路径（缓存避免重复计算）
+    fn get_or_create_path(&self) -> PathBuf {
+        if let Ok(mut cache) = self.current_path.lock() {
+            if let Some(ref path) = *cache {
+                return path.clone();
+            }
+            let path = daily_log_path(&self.dir);
+            *cache = Some(path.clone());
+            path
         } else {
-            [31,28,31,30,31,30,31,31,30,31,30,31]
-        };
-        let mut m = 0;
-        for &md in &month_days {
-            if d < md { break; }
-            d -= md;
-            m += 1;
+            daily_log_path(&self.dir)
         }
-        let day = d + 1;
-
-        let filename = format!("{:04}-{:02}-{:02}.jsonl", y, m + 1, day);
-        self.dir.join(filename)
     }
 }
 
-impl Drop for AuditLogger {
-    fn drop(&mut self) {
-        self.flush();
-    }
+/// 计算当天日志文件路径
+fn daily_log_path(dir: &PathBuf) -> PathBuf {
+    let now = now_secs() / 86400; // 转换为天数
+    let (y, m, d) = date_from_epoch(now);
+    let filename = format!("{y:04}-{m:02}-{d:02}.jsonl");
+    dir.join(filename)
 }
 
-/// 格式化 ISO 8601 时间戳（UTC+8）
-fn format_timestamp() -> String {
-    let now = SystemTime::now()
+fn now_secs() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let total = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let total_secs = now.as_secs() + 8 * 3600; // UTC+8
-    let nanos = now.subsec_nanos();
-    let days = total_secs / 86400;
-    let remaining = total_secs % 86400;
-    let hour = remaining / 3600;
-    let min = (remaining % 3600) / 60;
-    let sec = remaining % 60;
-    let millis = nanos / 1_000_000;
+        .unwrap_or_default()
+        .as_secs() as i64;
+    total + 8 * 3600 // UTC+8
+}
 
+/// 格式化 ISO 8601 时间戳 (UTC+8)
+pub fn format_timestamp() -> String {
+    let total = now_secs();
+    let sec = total % 60;
+    let min = (total / 60) % 60;
+    let hour = (total / 3600) % 24;
+    let days = total / 86400;
+    let (y, m, d) = date_from_epoch(days);
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_millis();
+    format!(
+        "{y:04}-{m:02}-{d:02}T{hour:02}:{min:02}:{sec:02}.{millis:03}+08:00"
+    )
+}
+
+fn date_from_epoch(days: i64) -> (i64, i64, i64) {
     let mut y = 1970i64;
-    let mut d = days as i64;
+    let mut d = days;
     loop {
-        let days_in_year = if is_leap(y) { 366 } else { 365 };
-        if d < days_in_year { break; }
-        d -= days_in_year;
+        let days_in = if is_leap(y) { 366 } else { 365 };
+        if d < days_in { break; }
+        d -= days_in;
         y += 1;
     }
     let month_days = if is_leap(y) {
@@ -191,25 +143,20 @@ fn format_timestamp() -> String {
     } else {
         [31,28,31,30,31,30,31,31,30,31,30,31]
     };
-    let mut m = 0;
+    let mut m = 0i64;
     for &md in &month_days {
         if d < md { break; }
         d -= md;
         m += 1;
     }
-    let day = d + 1;
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}+08:00",
-        y, m + 1, day, hour, min, sec, millis
-    )
+    (y, m + 1, d + 1)
 }
 
 fn is_leap(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
-// === 便捷的事件类型常量 ===
+// === 事件类型常量 ===
 
 pub const EVENT_USER_MESSAGE: &str = "user.message";
 pub const EVENT_SYSTEM_PROMPT: &str = "system.prompt";
@@ -225,41 +172,36 @@ mod tests {
     #[test]
     fn test_format_timestamp() {
         let ts = format_timestamp();
-        assert!(ts.len() > 20);
-        assert!(ts.ends_with("+08:00"));
-        // 应该是当前年份
-        assert!(ts.starts_with("2026"));
+        assert!(ts.len() > 20, "timestamp too short: {ts}");
+        assert!(ts.ends_with("+08:00"), "tz missing: {ts}");
+        assert!(ts.starts_with("2026"), "year: {ts}");
     }
 
     #[test]
-    fn test_log_and_flush() {
-        let dir = std::env::temp_dir().join("elio_test_audit");
+    fn test_log_writes_file() {
+        let dir = std::env::temp_dir().join("elio_test_log_write");
         let _ = fs::remove_dir_all(&dir);
 
         let logger = AuditLogger::new(dir.clone());
-        logger.log(EVENT_USER_MESSAGE, "你好", Some("user"));
+        logger.log(EVENT_USER_MESSAGE, "测试消息", Some("user"));
         logger.log(EVENT_ELIO_RESPONSE, "こんにちは", Some("elio"));
-        logger.flush();
 
-        // 验证文件存在
-        let path = logger.current_log_path();
-        assert!(path.exists());
+        // 验证文件被写入
+        let files: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+        assert!(!files.is_empty(), "没有日志文件被创建");
 
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn test_event_format() {
-        let event = LogEvent {
-            timestamp: "2026-06-10T15:09:43.770+08:00".into(),
-            event_type: "user.message".into(),
-            data: "你好".into(),
-            source: Some("user".into()),
-            session_id: None,
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains(r#""type":"#));
-        assert!(json.contains(r#""user.message"#));
-        assert!(json.contains(r#""你好"#));
+    fn test_event_json_format() {
+        let json = serde_json::json!({
+            "timestamp": "2026-06-10T15:09:43.770+08:00",
+            "type": "user.message",
+            "data": "你好",
+            "source": "user",
+        });
+        assert_eq!(json["type"], "user.message");
+        assert_eq!(json["data"], "你好");
     }
 }

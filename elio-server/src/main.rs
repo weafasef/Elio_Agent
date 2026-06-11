@@ -22,6 +22,8 @@ use tracing::info;
 pub struct AppState {
     session_mgr: SessionManager,
     config: Config,
+    /// 广播 Elio 回复到所有 WebSocket 连接
+    pub response_tx: tokio::sync::broadcast::Sender<String>,
 }
 
 #[tokio::main]
@@ -91,36 +93,84 @@ async fn main() -> anyhow::Result<()> {
     // 提取地址信息
     let addr = format!("{}:{}", config.server.host, config.server.port);
 
+    // 创建 broadcast channel 用于推送 Elio 回复到 WS 客户端
+    let (response_tx, _) = tokio::sync::broadcast::channel::<String>(64);
+
     // 构建 axum 路由
     let app_state = Arc::new(AppState {
         session_mgr,
         config,
+        response_tx: response_tx.clone(),
     });
 
-    // 心跳任务（每 30s 推送 Timer 感知 + 记忆维护）
+    // 心跳任务（每 30s 推送 Timer 感知 + 调用 step() → 广播结果到所有 WS 客户端）
     let heartbeat_state = Arc::clone(&app_state);
+    let heartbeat_tx = response_tx.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+        // 首次 tick 立即触发，不需要等 30s
+        interval.tick().await;
         loop {
             interval.tick().await;
             tracing::debug!("heartbeat tick");
 
-            if let Some(session) = heartbeat_state.session_mgr.get_default() {
-                let mut guard = session.inner.lock().await;
-                guard.on_timer_tick();
-                // 释放锁后 step（避免长时间持有）
-                drop(guard);
+            let session = match heartbeat_state.session_mgr.get_default() {
+                Some(s) => s,
+                None => continue,
+            };
 
-                // 执行 step（现在对话有 <system tick>，不会跳过）
+            // 1. 定时器 tick（推 Timer 感知 + system tick 到对话）
+            let mut guard = session.inner.lock().await;
+            guard.on_timer_tick();
+            drop(guard);
+
+            // 2. 执行 step()，处理 tool_use 递归
+            // 内层循环：LLM 可能连续返回多个 tool_use
+            loop {
                 let mut guard = session.inner.lock().await;
                 let result = guard.step().await;
                 match result {
-                    elio_core::mainloop::StepResult::Response(_) => {
-                        tracing::info!("Elio 主动说话（定时心跳触发）");
+                    elio_core::mainloop::StepResult::Response(text) => {
+                        tracing::info!("Elio 回复: {:.100}", text);
+                        // 发送 WS 协议消息
+                        let start = serde_json::json!({"type": "content_start", "blockType": "text"});
+                        let delta = serde_json::json!({"type": "content_delta", "text": text});
+                        let complete = serde_json::json!({
+                            "type": "message_complete",
+                            "usage": {"input_tokens": 0, "output_tokens": 0}
+                        });
+                        let _ = heartbeat_tx.send(start.to_string());
+                        let _ = heartbeat_tx.send(delta.to_string());
+                        let _ = heartbeat_tx.send(complete.to_string());
+                        break;
                     }
-                    _ => {}
+                    elio_core::mainloop::StepResult::ToolCall(name, input, id) => {
+                        tracing::info!("Elio 调用工具: {name}");
+                        // 执行工具，递归 step()
+                        drop(guard);
+                        let mut guard = session.inner.lock().await;
+                        let _ = guard.execute_tool(&name, input, &id).await;
+                        // 继续循环，处理 tool result 后的下一步
+                    }
+                    elio_core::mainloop::StepResult::Idle => {
+                        break;
+                    }
+                    elio_core::mainloop::StepResult::Error(e) => {
+                        tracing::warn!("Elio step 错误: {e}");
+                        let error = serde_json::json!({
+                            "type": "error",
+                            "message": e,
+                            "code": "LLM_ERROR"
+                        });
+                        let _ = heartbeat_tx.send(error.to_string());
+                        break;
+                    }
                 }
             }
+
+            // 3. 记忆维护 tick（慢路径推理）
+            let mut guard = session.inner.lock().await;
+            guard.memory_tick().await;
         }
     });
 
@@ -144,13 +194,14 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    let rx = state.response_tx.subscribe();
+    ws.on_upgrade(move |socket| handle_socket(socket, state, rx))
 }
 
-async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
+async fn handle_socket(socket: WebSocket, state: Arc<AppState>, rx: tokio::sync::broadcast::Receiver<String>) {
     // 获取默认会话
     if let Some(session) = state.session_mgr.get_default() {
-        ws::handle_ws(socket, session).await;
+        ws::handle_ws(socket, session, rx).await;
     } else {
         tracing::error!("没有可用会话");
     }

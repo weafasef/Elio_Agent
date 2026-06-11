@@ -102,8 +102,10 @@ fn handle_server_message(text: &str) {
             print!("\n🤖 ");
         }
         "content_delta" => {
-            // 增量内容
-            if let Some(delta) = json["delta"]["text"].as_str() {
+            // 增量内容 — 支持两种格式：新格式 {"text":"..."} 和旧格式 {"delta":{"text":"..."}}
+            if let Some(text) = json["text"].as_str() {
+                print!("{text}");
+            } else if let Some(delta) = json["delta"]["text"].as_str() {
                 print!("{delta}");
             }
         }
