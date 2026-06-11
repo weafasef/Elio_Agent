@@ -2,6 +2,7 @@
 //!
 //! 定义统一的 LLM 调用接口，提供 DeepSeek（兼容 Anthropic 协议）实现。
 
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -74,10 +75,30 @@ pub struct ChatResponse {
     pub model: String,
 }
 
+/// content_block_start 的 content_block 类型
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ContentBlockStart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        name: String,
+        #[serde(default)]
+        input: serde_json::Value,
+        id: String,
+    },
+}
+
 /// LLM 流式事件
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum StreamEvent {
+    #[serde(rename = "content_block_start")]
+    ContentBlockStart {
+        index: u32,
+        content_block: ContentBlockStart,
+    },
     #[serde(rename = "content_block_delta")]
     ContentBlockDelta {
         index: u32,
@@ -245,10 +266,278 @@ impl LlmClient for DeepSeekClient {
     async fn chat_stream(
         &self,
         request: ChatRequest,
-        _on_event: Box<dyn Fn(StreamEvent) + Send>,
+        on_event: Box<dyn Fn(StreamEvent) + Send>,
     ) -> Result<ChatResponse, LlmError> {
-        // 简化实现：目前直接调用非流式 API
-        self.chat(request).await
+        // 构建请求体，加 stream: true
+        let mut body = self.build_anthropic_body(&request);
+        body["stream"] = serde_json::Value::Bool(true);
+
+        let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
+
+        let resp = self
+            .http_client
+            .post(&url)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LlmError::HttpError(e.to_string()))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(LlmError::ApiError(status.as_u16(), body_text));
+        }
+
+        // ── SSE 流式解析 ─────────────────────────────────────────────────
+        // Anthropic Messages API streaming format:
+        //   event: content_block_delta
+        //   data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"..."}}
+        //   (empty line)
+        //
+        // DeepSeek 有时省略 event: 前缀，fallback 到 data JSON 的 type 字段
+
+        let mut stream = resp.bytes_stream();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut current_event = String::new();
+        let mut current_data = String::new();
+
+        // 用于构建最终 ChatResponse 的状态
+        let mut full_text = String::new();
+        let mut tool_uses: Vec<ContentBlock> = Vec::new();
+        // (index, name, id, partial_json)
+        let mut pending_tool: Option<(u32, String, String, String)> = None;
+        let mut stop_reason: Option<String> = None;
+        let mut usage: Option<Usage> = None;
+        let mut model: String = "unknown".into();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| LlmError::HttpError(e.to_string()))?;
+            buf.extend_from_slice(&chunk);
+
+            // 从 buffer 中提取完整行
+            loop {
+                let nl = buf.iter().position(|&b| b == b'\n');
+                let line = match nl {
+                    Some(pos) => {
+                        let raw: Vec<u8> = buf.drain(..=pos).collect();
+                        String::from_utf8_lossy(&raw[..raw.len() - 1]).to_string()
+                    }
+                    None => break,
+                };
+                let trimmed = line.trim().to_string();
+
+                if trimmed.is_empty() {
+                    // 空行 = SSE 消息分隔符 → 处理累积的 event/data
+                    if current_data.is_empty() {
+                        continue;
+                    }
+
+                    // 确定事件类型：优先取 event: 头，否则从 JSON type 字段取
+                    let event_type = if !current_event.is_empty() {
+                        current_event.clone()
+                    } else if let Ok(val) =
+                        serde_json::from_str::<serde_json::Value>(&current_data)
+                    {
+                        val.get("type")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .to_string()
+                    } else {
+                        String::new()
+                    };
+
+                    // 解析 JSON data
+                    if let Ok(val) =
+                        serde_json::from_str::<serde_json::Value>(&current_data)
+                    {
+                        match event_type.as_str() {
+                            "message_start" => {
+                                if let Some(msg) = val.get("message") {
+                                    model = msg
+                                        .get("model")
+                                        .and_then(|m| m.as_str())
+                                        .unwrap_or("unknown")
+                                        .to_string();
+                                }
+                            }
+                            "content_block_start" => {
+                                let index = val
+                                    .get("index")
+                                    .and_then(|i| i.as_u64())
+                                    .unwrap_or(0) as u32;
+                                if let Some(cb) = val.get("content_block") {
+                                    match cb.get("type").and_then(|t| t.as_str()) {
+                                        Some("text") => {
+                                            let text = cb
+                                                .get("text")
+                                                .and_then(|t| t.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            on_event(StreamEvent::ContentBlockStart {
+                                                index,
+                                                content_block:
+                                                    ContentBlockStart::Text { text },
+                                            });
+                                        }
+                                        Some("tool_use") => {
+                                            let name = cb
+                                                .get("name")
+                                                .and_then(|n| n.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            let id = cb
+                                                .get("id")
+                                                .and_then(|i| i.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            pending_tool =
+                                                Some((index, name.clone(), id.clone(), String::new()));
+                                            on_event(StreamEvent::ContentBlockStart {
+                                                index,
+                                                content_block:
+                                                    ContentBlockStart::ToolUse {
+                                                        name,
+                                                        input: serde_json::Value::Null,
+                                                        id,
+                                                    },
+                                            });
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            "content_block_delta" => {
+                                let index = val
+                                    .get("index")
+                                    .and_then(|i| i.as_u64())
+                                    .unwrap_or(0) as u32;
+                                if let Some(delta) = val.get("delta") {
+                                    match delta.get("type").and_then(|t| t.as_str()) {
+                                        Some("text_delta") => {
+                                            let text = delta
+                                                .get("text")
+                                                .and_then(|t| t.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            full_text.push_str(&text);
+                                            on_event(StreamEvent::ContentBlockDelta {
+                                                index,
+                                                delta: ContentDelta::TextDelta { text },
+                                            });
+                                        }
+                                        Some("input_json_delta") => {
+                                            let partial = delta
+                                                .get("partial_json")
+                                                .and_then(|t| t.as_str())
+                                                .unwrap_or("")
+                                                .to_string();
+                                            if let Some(ref mut pt) = pending_tool {
+                                                pt.3.push_str(&partial);
+                                            }
+                                            on_event(StreamEvent::ContentBlockDelta {
+                                                index,
+                                                delta: ContentDelta::InputJsonDelta {
+                                                    partial_json: partial,
+                                                },
+                                            });
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            "content_block_stop" => {
+                                let index = val
+                                    .get("index")
+                                    .and_then(|i| i.as_u64())
+                                    .unwrap_or(0) as u32;
+                                // tool_use 块结束：构造最终 ToolUse
+                                if let Some((idx, name, id, json_str)) = pending_tool.take() {
+                                    if idx == index {
+                                        let input: serde_json::Value =
+                                            serde_json::from_str(&json_str)
+                                                .unwrap_or(serde_json::Value::Null);
+                                        tool_uses.push(ContentBlock::ToolUse {
+                                            name,
+                                            input,
+                                            id,
+                                        });
+                                    }
+                                }
+                                on_event(StreamEvent::ContentBlockStop { index });
+                            }
+                            "message_delta" => {
+                                if let Some(d) = val.get("delta") {
+                                    stop_reason = d
+                                        .get("stop_reason")
+                                        .and_then(|s| s.as_str())
+                                        .map(String::from);
+                                    on_event(StreamEvent::MessageDelta {
+                                        delta: MessageDelta {
+                                            stop_reason: stop_reason.clone(),
+                                        },
+                                    });
+                                }
+                                if let Some(u) = val.get("usage") {
+                                    usage = Some(Usage {
+                                        input_tokens: u
+                                            .get("input_tokens")
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(0) as u32,
+                                        output_tokens: u
+                                            .get("output_tokens")
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(0) as u32,
+                                    });
+                                }
+                            }
+                            "message_stop" => {
+                                on_event(StreamEvent::MessageStop);
+                            }
+                            "ping" => {
+                                on_event(StreamEvent::Ping);
+                            }
+                            "error" => {
+                                let msg = val
+                                    .get("error")
+                                    .and_then(|e| {
+                                        e.get("message")
+                                            .and_then(|m| m.as_str())
+                                    })
+                                    .unwrap_or("Unknown stream error");
+                                return Err(LlmError::ApiError(0, msg.to_string()));
+                            }
+                            _ => {
+                                tracing::debug!("未知 SSE 事件类型: {event_type}");
+                            }
+                        }
+                    }
+
+                    current_event.clear();
+                    current_data.clear();
+                } else if let Some(data_val) = trimmed.strip_prefix("data: ") {
+                    current_data = data_val.to_string();
+                } else if let Some(event_val) = trimmed.strip_prefix("event: ") {
+                    current_event = event_val.to_string();
+                }
+                // 其他行忽略（如注释行）
+            }
+        }
+
+        // ── 构建最终 ChatResponse ──
+        let mut content = Vec::new();
+        if !full_text.is_empty() {
+            content.push(ContentBlock::Text { text: full_text });
+        }
+        content.extend(tool_uses);
+
+        Ok(ChatResponse {
+            content,
+            usage,
+            stop_reason,
+            model,
+        })
     }
 }
 

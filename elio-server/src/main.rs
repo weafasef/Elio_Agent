@@ -148,11 +148,34 @@ async fn main() -> anyhow::Result<()> {
             guard.on_timer_tick();
             drop(guard);
 
-            // 2. 单次 step（工具异步执行，不阻塞心跳）
+            // 2. 单次 step（流式 — 逐 delta 实时广播文本到客户端）
             // 用块作用域控制 guard 生命周期，ToolCall 分支提取所需数据后释放锁
             let step_result = {
                 let mut guard = session.inner.lock().await;
-                let result = guard.step().await;
+
+                // 先发 content_start 标记文本开始
+                let _ = heartbeat_tx.send(
+                    serde_json::json!({"type": "content_start", "blockType": "text"}).to_string()
+                );
+
+                // 流式 step — on_delta 中实时广播每个文本片段
+                // 用 ThinkStripper 去掉 <think>...</think> 块内容
+                let stripper = std::sync::Arc::new(std::sync::Mutex::new(ThinkStripper::new()));
+                let s = stripper.clone();
+                let tx = heartbeat_tx.clone();
+
+                let result = guard.step_stream(move |delta_text| {
+                    let clean = s.lock().unwrap().feed(delta_text);
+                    if !clean.is_empty() {
+                        let _ = tx.send(
+                            serde_json::json!({
+                                "type": "content_delta",
+                                "delta": {"text": clean}
+                            }).to_string()
+                        );
+                    }
+                }).await;
+
                 match result {
                     elio_core::mainloop::StepResult::ToolCall(ref name, ..) => {
                         guard.worldview.push(
@@ -162,6 +185,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                     _ => {}
                 }
+
                 result
             }; // guard 在此释放
 
@@ -169,17 +193,13 @@ async fn main() -> anyhow::Result<()> {
                 elio_core::mainloop::StepResult::Response(text) => {
                     tracing::info!("Elio 回复: {:.100}", text);
 
-                    // 去掉 <think> 思考块（只显示实际回复内容）
-                    let display_text = strip_think_tags(&text);
-                    let start = serde_json::json!({"type": "content_start", "blockType": "text"});
-                    let delta = serde_json::json!({"type": "content_delta", "text": display_text});
-                    let complete = serde_json::json!({
-                        "type": "message_complete",
-                        "usage": {"input_tokens": 0, "output_tokens": 0}
-                    });
-                    let _ = heartbeat_tx.send(start.to_string());
-                    let _ = heartbeat_tx.send(delta.to_string());
-                    let _ = heartbeat_tx.send(complete.to_string());
+                    // 标记文本流结束
+                    let _ = heartbeat_tx.send(
+                        serde_json::json!({
+                            "type": "message_complete",
+                            "usage": {"input_tokens": 0, "output_tokens": 0}
+                        }).to_string()
+                    );
 
                     // ── TTS 语音合成（后台异步，不阻塞心跳） ──────────────
                     let tts_text = strip_think_tags(&text);
@@ -404,4 +424,62 @@ fn strip_think_tags(text: &str) -> String {
         i += 1;
     }
     result.trim().to_string()
+}
+
+/// 流式版本: 逐块剥离 <think>...</think> 内容
+///
+/// 与 strip_think_tags() 的差异：
+/// - 有状态（in_think 跨 chunk 保持）
+/// - 每次 feed() 处理一个 chunk，返回可安全显示的文本
+struct ThinkStripper {
+    in_think: bool,
+}
+
+impl ThinkStripper {
+    fn new() -> Self {
+        Self { in_think: false }
+    }
+
+    /// 处理一个文本块，返回剥离 <think> 块后的内容
+    fn feed(&mut self, chunk: &str) -> String {
+        let mut out = String::new();
+        let chars: Vec<char> = chunk.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if !self.in_think
+                && i + 6 < chars.len()
+                && chars[i] == '<'
+                && chars[i + 1] == 't'
+                && chars[i + 2] == 'h'
+                && chars[i + 3] == 'i'
+                && chars[i + 4] == 'n'
+                && chars[i + 5] == 'k'
+                && chars[i + 6] == '>'
+            {
+                self.in_think = true;
+                i += 7;
+                continue;
+            }
+            if self.in_think
+                && i + 8 < chars.len()
+                && chars[i] == '<'
+                && chars[i + 1] == '/'
+                && chars[i + 2] == 't'
+                && chars[i + 3] == 'h'
+                && chars[i + 4] == 'i'
+                && chars[i + 5] == 'n'
+                && chars[i + 6] == 'k'
+                && chars[i + 7] == '>'
+            {
+                self.in_think = false;
+                i += 8;
+                continue;
+            }
+            if !self.in_think {
+                out.push(chars[i]);
+            }
+            i += 1;
+        }
+        out
+    }
 }

@@ -255,6 +255,98 @@ impl MainLoop {
         StepResult::Idle
     }
 
+    /// 流式 step — LLM 流式输出时通过 on_delta 回调逐段返回文本增量
+    ///
+    /// 调用者可以在 on_delta 中实时广播文本到客户端（如 WebSocket content_delta）。
+    /// step_stream 自身仍然等待完整响应后才返回 StepResult，
+    /// 但 on_delta 让调用者可以提前处理文本片段。
+    ///
+    /// 与 step() 的区别：
+    /// - 使用 chat_stream() 而非 chat()，支持 SSE 流式
+    /// - on_delta 回调在每个 text_delta 到达时触发
+    /// - 最终 StepResult 处理逻辑与 step() 相同
+    pub async fn step_stream<F>(&mut self, on_delta: F) -> StepResult
+    where
+        F: Fn(&str) + Send + 'static,
+    {
+        if self.conversation.messages.is_empty() {
+            self.state = LoopState::Idle;
+            return StepResult::Idle;
+        }
+
+        self.worldview.commit_slice();
+
+        // 构建系统提示词（世界观注入 + 记忆上下文）
+        let worldview_text = self.worldview.build_worldview();
+        let mut system_prompt = self.config.system_prompt.clone();
+        if !worldview_text.is_empty() {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&worldview_text);
+        }
+        let mem_ctx = self.memory.get_context();
+        if !mem_ctx.is_empty() {
+            system_prompt.push_str("\n\n## 记忆上下文\n");
+            system_prompt.push_str(&mem_ctx);
+        }
+
+        self.state = LoopState::Thinking;
+
+        let request = ChatRequest {
+            model: self.config.model.clone(),
+            system: system_prompt,
+            messages: self.conversation.messages.clone(),
+            tools: self.tools.to_llm_tools(),
+            max_tokens: self.config.max_tokens,
+        };
+
+        // 流式 LLM 调用 — 逐 text_delta 回调
+        let response = match self.llm.chat_stream(request, Box::new(move |event| {
+            if let crate::llm::StreamEvent::ContentBlockDelta {
+                delta: crate::llm::ContentDelta::TextDelta { text },
+                ..
+            } = event
+            {
+                on_delta(&text);
+            }
+            // 忽略 tool_use / message_delta 等事件，由返回的 ChatResponse 处理
+        }))
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                self.state = LoopState::Idle;
+                return StepResult::Error(e.to_string());
+            }
+        };
+
+        // ── 后续处理与 step() 相同 ──────────────────────────────────
+        for block in &response.content {
+            match block {
+                ContentBlock::Text { text } => {
+                    self.conversation.add_assistant_text(text);
+                    self.memory.record_event(MemoryEvent {
+                        text: text.clone(),
+                        event_type: crate::memory::EventType::AssistantMessage,
+                        session_id: None,
+                    });
+
+                    self.logger.log(crate::log::EVENT_ELIO_RESPONSE, text, Some("elio"));
+                    info!("Elio 回复: {:.100}", text);
+                    self.state = LoopState::Idle;
+                    return StepResult::Response(text.clone());
+                }
+                ContentBlock::ToolUse { name, input, id } => {
+                    self.state = LoopState::ExecutingTool;
+                    return StepResult::ToolCall(name.clone(), input.clone(), id.clone());
+                }
+                _ => {}
+            }
+        }
+
+        self.state = LoopState::Idle;
+        StepResult::Idle
+    }
+
     /// 执行工具并将结果记录到 conversation + worldview（不调 step，由心跳循环驱动）
     pub async fn execute_tool(&mut self, name: &str, input: serde_json::Value, tool_call_id: &str) {
         let ctx = ToolContext {
