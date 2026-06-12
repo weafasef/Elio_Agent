@@ -327,17 +327,17 @@ LLM 回复可包含语音标签控制合成内容：
 
 ```xml
 <emotion>happy</emotion>
-<ja>こんにちは、今日もいい天気ですね。</ja>
-<zh>你好，今天天气真好啊。</zh>
+<en>Good morning! Beautiful weather today, isn't it?</en>
+<zh>早上好！今天天气真好啊。</zh>
 ```
 
 | 标签 | 用途 |
 |------|------|
-| `<ja>...</ja>` | 日文语音文本（合成用） |
+| `<en>...</en>` | 英文语音文本（合成用） |
 | `<zh>...</zh>` | 中文字幕（客户端显示） |
 | `<emotion>...</emotion>` | 情感（happy/sad/neutral/surprise...） |
 
-无标签时自动检测日文字符作为 fallback。
+无标签时直接使用全文作为 fallback。
 
 ### 参考音频
 

@@ -52,7 +52,7 @@ pub struct TtsResult {
 /// 语音标签解析结果
 #[derive(Debug)]
 pub struct SpeechBlocks {
-    pub ja: String,
+    pub en: String,
     pub zh: String,
     pub emotion: String,
 }
@@ -424,17 +424,17 @@ impl TtsService {
 /// 从 LLM 回复文本中解析语音标签
 ///
 /// 支持的标签：
-/// - `<ja>...</ja>` — 日文语音文本（合成用）
+/// - `<en>...</en>` — 英文语音文本（合成用）
 /// - `<zh>...</zh>` — 中文字幕
 /// - `<emotion>...</emotion>` — 情感（happy/sad/neutral...）
 ///
-/// 没有标签时检测是否含日文字符，有则 fallback 整段文本。
+/// 没有标签时 fallback 整段文本。
 pub fn parse_speech_blocks(text: &str) -> Option<SpeechBlocks> {
     // 提取标签内容
-    let ja_blocks: Vec<&str> = text
-        .split("<ja>")
+    let en_blocks: Vec<&str> = text
+        .split("<en>")
         .skip(1)
-        .filter_map(|s| s.split("</ja>").next())
+        .filter_map(|s| s.split("</en>").next())
         .map(|s| s.trim())
         .collect();
 
@@ -451,56 +451,30 @@ pub fn parse_speech_blocks(text: &str) -> Option<SpeechBlocks> {
         .and_then(|s| s.split("</emotion>").next())
         .map(|s| s.trim().to_lowercase());
 
-    let ja = ja_blocks.join("");
+    let en = en_blocks.join(" ");
     let zh = zh_blocks.join("");
 
-    if !ja.is_empty() {
+    if !en.is_empty() {
         return Some(SpeechBlocks {
-            ja,
+            en,
             zh,
             emotion: emotion.unwrap_or_else(|| "happy".into()),
         });
     }
 
-    // 没有 <ja> 标签：检查是否有日文字符作为 fallback
-    let has_japanese = text.chars().any(|c| {
-        matches!(c,
-            '\u{3040}'..='\u{309F}' | // 平假名
-            '\u{30A0}'..='\u{30FF}' | // 片假名
-            '\u{FF66}'..='\u{FF9D}'   // 半角片假名
-        )
-    });
-
-    if has_japanese {
-        // 去掉 HTML 标签和工具调用标记
-        let cleaned = text
-            .replace(&['[', ']', '<', '>', '/', '\''][..], "")
-            .trim()
-            .to_string();
-        // 只保留日文字符、标点和空格
-        let cleaned: String = cleaned.chars().filter(|c| {
-            c.is_whitespace()
-                || matches!(c,
-                    '\u{3040}'..='\u{309F}' | // 平假名
-                    '\u{30A0}'..='\u{30FF}' | // 片假名
-                    '\u{FF66}'..='\u{FF9D}' | // 半角片假名
-                    '\u{3000}'..='\u{303F}' | // 日文标点
-                    '\u{FF00}'..='\u{FFEF}' | // 全角字母/标点
-                    '\u{4E00}'..='\u{9FFF}' | // CJK 汉字（用于混合文本）
-                    '.' | ',' | '?' | '!' | '…' | '—' | '~'
-                )
-        }).collect();
-        if cleaned.trim().is_empty() {
-            return None;
-        }
-        return Some(SpeechBlocks {
-            ja: cleaned,
-            zh: String::new(),
-            emotion: emotion.unwrap_or_else(|| "happy".into()),
-        });
+    // 没有 <en> 标签：直接用全文作为 fallback（去掉 HTML 标签）
+    let cleaned = text
+        .replace(&['[', ']', '<', '>', '/', '\''][..], "")
+        .trim()
+        .to_string();
+    if cleaned.is_empty() {
+        return None;
     }
-
-    None
+    Some(SpeechBlocks {
+        en: cleaned,
+        zh: String::new(),
+        emotion: emotion.unwrap_or_else(|| "happy".into()),
+    })
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────
