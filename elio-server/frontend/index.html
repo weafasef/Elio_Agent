@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Elio · 语音驱动</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  #app { max-width: 520px; width: 100%; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+  h1 { font-size: 20px; color: #e8d5b7; margin-bottom: 4px; }
+  .tag { font-size: 13px; color: #666; margin-bottom: 16px; }
+
+  #canvas-wrap {
+    position: relative; background: #0f0f1e; border-radius: 12px;
+    border: 1px solid #2a2a4a; width: 400px; height: 600px;
+    display: flex; align-items: center; justify-content: center; overflow: hidden; user-select: none;
+  }
+  canvas { display: block; image-rendering: pixelated; width: 100%; height: 100%; }
+
+  #subtitle {
+    position: absolute; bottom: 0; left: 0; right: 0; padding: 16px 20px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.75));
+    color: #fff; font-size: 16px; text-align: center;
+    min-height: 56px; pointer-events: none; transition: opacity .3s;
+  }
+  #subtitle:empty { opacity: 0; }
+
+  #hud {
+    display: flex; gap: 16px; margin: 10px 0; font-size: 13px;
+    font-variant-numeric: tabular-nums; align-items: center;
+  }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+  .dot.off { background: #555; }
+  .dot.on  { background: #2ecc71; box-shadow: 0 0 6px #2ecc71; }
+  .dot.talk { background: #f39c12; box-shadow: 0 0 8px #f39c12; animation: pulse .3s infinite; }
+  @keyframes pulse { 50% { opacity: .5; } }
+
+  #volume-bar { width: 120px; height: 4px; background: #333; border-radius: 2px; overflow: hidden; }
+  #volume-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #2ecc71, #f39c12, #e74c3c); border-radius: 2px; transition: width .05s; }
+
+  #controls { display: flex; gap: 8px; margin: 6px 0; }
+  button {
+    padding: 6px 18px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  #btn-connect { background: #2ecc71; color: #fff; }
+  #btn-connect:hover { background: #27ae60; }
+  #btn-connect:disabled { background: #555; cursor: not-allowed; }
+  #btn-disconnect { background: #e74c3c; color: #fff; }
+  #btn-disconnect:hover { background: #c0392b; }
+  #btn-disconnect:disabled { background: #555; cursor: not-allowed; }
+
+  .ctrl-row { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; margin: 6px 0; width: 100%; }
+  .ctrl-group { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #aaa; }
+  .ctrl-group input[type="range"] { width: 80px; accent-color: #e8d5b7; }
+  .ctrl-group .val { color: #e8d5b7; font-weight: 600; min-width: 22px; text-align: right; font-size: 13px; }
+  .ctrl-group label { color: #888; }
+
+  #config { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-bottom: 4px; }
+  #config label { font-size: 12px; color: #666; display: flex; align-items: center; gap: 3px; }
+  #config input { padding: 3px 6px; background: #0f0f1e; border: 1px solid #333; border-radius: 4px; color: #e0e0e0; font-size: 12px; width: 100px; }
+  #config input:focus { outline: none; border-color: #2ecc71; }
+
+  #log { margin-top: 8px; width: 100%; max-height: 40px; overflow: hidden; font-family: Consolas, monospace; font-size: 11px; color: #555; text-align: center; }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <h1>🎮 Elio</h1>
+  <p class="tag">语音驱动 · 震动说话</p>
+
+  <div id="canvas-wrap">
+    <canvas id="canvas" width="400" height="600"></canvas>
+    <div id="subtitle"></div>
+  </div>
+
+  <div id="hud">
+    <span><span class="dot off" id="status-dot"></span><b id="status-text">未连接</b></span>
+    <span>音量</span>
+    <div id="volume-bar"><div id="volume-fill"></div></div>
+  </div>
+
+  <div id="controls">
+    <button id="btn-connect">▶ 连接</button>
+    <button id="btn-disconnect" disabled>⏹ 断开</button>
+  </div>
+
+  <div class="ctrl-row">
+    <div class="ctrl-group">
+      <label>震动幅度</label>
+      <input type="range" id="amp" min="0" max="30" value="10">
+      <span class="val" id="amp-val">10</span>
+    </div>
+    <div class="ctrl-group">
+      <label>震动频率</label>
+      <input type="range" id="freq" min="10" max="150" value="60">
+      <span class="val" id="freq-val">60</span>
+    </div>
+    <div class="ctrl-group">
+      <label>音量灵敏度</label>
+      <input type="range" id="gain" min="0.1" max="5" step="0.1" value="1.5">
+      <span class="val" id="gain-val">1.5</span>
+    </div>
+    <div class="ctrl-group">
+      <label>最低阈值</label>
+      <input type="range" id="thresh" min="0" max="0.3" step="0.01" value="0.03">
+      <span class="val" id="thresh-val">0.03</span>
+    </div>
+  </div>
+
+  <div id="config">
+    <label>服务器 <input id="ws-host" value="127.0.0.1"></label>
+    <label>:<input id="ws-port" value="3456" style="width:56px"></label>
+    <label>角色图 <input id="img-path" value="Elio-kimono-256-512.png"></label>
+  </div>
+
+  <div id="log"></div>
+</div>
+
+<script>
+// DOM
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const subtitleEl = document.getElementById('subtitle');
+const statusDot = document.getElementById('status-dot');
+const statusText = document.getElementById('status-text');
+const volumeFill = document.getElementById('volume-fill');
+const btnConnect = document.getElementById('btn-connect');
+const btnDisconnect = document.getElementById('btn-disconnect');
+const wsHost = document.getElementById('ws-host');
+const wsPort = document.getElementById('ws-port');
+const imgPath = document.getElementById('img-path');
+const logEl = document.getElementById('log');
+
+const ampR = document.getElementById('amp'), ampV = document.getElementById('amp-val');
+const freqR = document.getElementById('freq'), freqV = document.getElementById('freq-val');
+const gainR = document.getElementById('gain'), gainV = document.getElementById('gain-val');
+const threshR = document.getElementById('thresh'), threshV = document.getElementById('thresh-val');
+
+[ampR, freqR, gainR, threshR].forEach(r => {
+  r.addEventListener('input', () => {
+    if (r === ampR) ampV.textContent = r.value;
+    else if (r === freqR) freqV.textContent = r.value;
+    else if (r === gainR) gainV.textContent = r.value;
+    else if (r === threshR) threshV.textContent = parseFloat(r.value).toFixed(2);
+  });
+});
+
+// 状态
+let ws = null, audioCtx = null;
+let characterImg = null;
+let connected = false, isTalking = false;
+let contentBuffer = '';
+let pendingSubtitle = '';     // <zh> 累积内容（等声音同步显示）
+let subtitleReveal = 0;       // 已显示的字数
+let totalAudioDuration = 0;   // 当前消息所有音频总时长（秒）
+let audioPlayedDuration = 0;  // 已播完的音频时长
+let smoothVolume = 0;
+const ATTACK = 0.25, RELEASE = 0.06;
+let audioQueue = [], isPlaying = false, playStartTime = 0, currentVolumes = [];
+let lastLogTs = 0;
+
+function log(msg, force) {
+  const n = Date.now();
+  if (!force && n - lastLogTs < 500) return;
+  lastLogTs = n;
+  logEl.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+}
+
+function loadImage(path) {
+  return new Promise(r => {
+    const img = new Image();
+    img.onload = () => { characterImg = img; r(true); };
+    img.onerror = () => r(false);
+    img.src = path;
+  });
+}
+
+// 音频
+function b64ToBuf(b64) {
+  const bin = atob(b64), u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8.buffer;
+}
+
+function computeVolumes(buf, ms = 50) {
+  const ch = buf.getChannelData(0), sr = buf.sampleRate, c = Math.floor(sr * ms / 1000);
+  const vols = [];
+  for (let i = 0; i < ch.length; i += c) {
+    let sum = 0; const n = Math.min(c, ch.length - i);
+    for (let j = 0; j < n; j++) sum += ch[i + j] * ch[i + j];
+    vols.push(Math.sqrt(sum / n));
+  }
+  const mx = Math.max(...vols, 0.001);
+  return vols.map(v => Math.min(v / mx, 1));
+}
+
+function getVol() {
+  if (!audioCtx || !isPlaying || !currentVolumes.length) return 0;
+  const e = (audioCtx.currentTime - playStartTime) * 1000;
+  const i = Math.floor(e / 50);
+  return i < currentVolumes.length ? currentVolumes[i] : 0;
+}
+
+function playNext() {
+  if (!audioQueue.length) {
+    isPlaying = false; currentVolumes = []; isTalking = false;
+    subtitleReveal = pendingSubtitle.length; // 显示完整字幕
+    subtitleEl.textContent = pendingSubtitle;
+    statusDot.className = 'dot on'; statusText.textContent = '已连接';
+    return;
+  }
+  const item = audioQueue.shift();
+  isPlaying = true; isTalking = true; currentVolumes = item.volumes;
+  totalAudioDuration += item.buffer.duration;
+  statusDot.className = 'dot talk'; statusText.textContent = '说话中...';
+  const src = audioCtx.createBufferSource();
+  src.buffer = item.buffer; src.connect(audioCtx.destination);
+  playStartTime = audioCtx.currentTime;
+  src.start(playStartTime);
+  src.onended = () => {
+    audioPlayedDuration += item.buffer.duration;
+    playNext();
+  };
+}
+
+async function onTts(msg) {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+  try {
+    const buf = await audioCtx.decodeAudioData(b64ToBuf(msg.data));
+    audioQueue.push({ buffer: buf, volumes: computeVolumes(buf) });
+    if (!isPlaying) playNext();
+  } catch (_) {}
+}
+
+// WS
+function doConnect() {
+  const host = wsHost.value.trim() || '127.0.0.1', port = wsPort.value.trim() || '3456';
+  const url = `ws://${host}:${port}/ws/elio`;
+  loadImage(imgPath.value.trim() || 'Elio-kimono-256-512.png');
+
+  try { ws = new WebSocket(url); } catch (e) { log('连接失败', true); return; }
+  ws.onopen = () => {
+    connected = true; btnConnect.disabled = true; btnDisconnect.disabled = false;
+    statusDot.className = 'dot on'; statusText.textContent = '已连接';
+    log('✓ 已连接', true);
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  };
+  ws.onmessage = e => {
+    try {
+      const msg = JSON.parse(e.data);
+      switch (msg.type) {
+        case 'model_info': break;
+        case 'content_start': {
+          subtitleEl.textContent = '';
+          contentBuffer = '';
+          pendingSubtitle = '';
+          subtitleReveal = 0;
+          totalAudioDuration = 0;
+          audioPlayedDuration = 0;
+          break;
+        }
+        case 'content_delta': {
+          const t = msg.delta?.text || msg.text || '';
+          contentBuffer += t;
+          // 提取 <zh>...</zh> 内容，但先不显示（等声音同步）
+          const zhText = contentBuffer.match(/<zh>(.*?)<\/zh>/g)
+            ?.map(m => m.replace('<zh>', '').replace('</zh>', ''))
+            .join('') || '';
+          if (zhText) pendingSubtitle = zhText;
+          break;
+        }
+        case 'tts_chunk': onTts(msg); break;
+        case 'message_complete': {
+          // 如果没找到 <zh>，用原文后备
+          if (!pendingSubtitle && contentBuffer) {
+            pendingSubtitle = contentBuffer.replace(/<[^>]+>/g, '').trim();
+          }
+          break;
+        }
+        case 'error': log('错误', true); break;
+      }
+    } catch (_) {}
+  };
+  ws.onclose = () => { doDisconnect(); log('已断开', true); };
+  ws.onerror = () => {};
+}
+
+function doDisconnect() {
+  connected = false; isTalking = false; isPlaying = false; audioQueue = []; currentVolumes = [];
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  btnConnect.disabled = false; btnDisconnect.disabled = true;
+  statusDot.className = 'dot off'; statusText.textContent = '未连接';
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+}
+
+btnConnect.addEventListener('click', doConnect);
+btnDisconnect.addEventListener('click', doDisconnect);
+[wsHost, wsPort].forEach(el => el.addEventListener('keydown', e => { if (e.key === 'Enter' && !connected) doConnect(); }));
+
+// 渲染
+const CW = 400, CH = 600, CX = CW / 2, CY = CH / 2;
+
+function frame(time) {
+  const t = time / 1000;
+
+  // 音量
+  const gain = parseFloat(gainR.value) || 1.5;
+  const threshold = parseFloat(threshR.value) || 0;
+  let raw = getVol() * gain;
+  if (raw > 1) raw = 1;
+  if (raw < threshold) raw = 0;
+
+  if (raw > smoothVolume) smoothVolume += (raw - smoothVolume) * ATTACK;
+  else smoothVolume += (raw - smoothVolume) * RELEASE;
+
+  volumeFill.style.width = `${(smoothVolume * 100).toFixed(0)}%`;
+
+  // ── 字幕同步 ──
+  if (pendingSubtitle && isPlaying) {
+    const elapsed = audioCtx ? (audioCtx.currentTime - playStartTime) : 0;
+    const currentTotal = audioPlayedDuration + elapsed;
+    const progress = totalAudioDuration > 0 ? Math.min(currentTotal / totalAudioDuration, 1) : 1;
+    const reveal = Math.floor(progress * pendingSubtitle.length);
+    if (reveal > subtitleReveal) {
+      subtitleReveal = reveal;
+      subtitleEl.textContent = pendingSubtitle.slice(0, reveal);
+    }
+  }
+
+  // 震动
+  const amp = parseFloat(ampR.value) || 10;
+  const freq = parseFloat(freqR.value) || 60;
+  let offsetY = 0;
+
+  if (isTalking && smoothVolume > 0.01) {
+    const s = Math.sin(t * freq) * 0.6
+            + Math.sin(t * freq * 0.73) * 0.25
+            + Math.sin(t * freq * 1.57) * 0.15;
+    offsetY = s * smoothVolume * amp;
+  } else {
+    offsetY = Math.sin(t * 2.0) * 1.5;
+  }
+
+  // 绘制
+  ctx.clearRect(0, 0, CW, CH);
+  ctx.fillStyle = '#0f0f1e';
+  ctx.fillRect(0, 0, CW, CH);
+
+  if (characterImg) {
+    const scale = Math.min(CW / characterImg.width, CH / characterImg.height) * 0.9;
+    const w = characterImg.width * scale, h = characterImg.height * scale;
+    ctx.save();
+    ctx.translate(CX, CY + offsetY);
+    ctx.drawImage(characterImg, -w / 2, -h / 2, w, h);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#555';
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('加载图像中...', CX, CY);
+  }
+
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
+loadImage('Elio-kimono-256-512.png');
+log('Elio 前端已加载 — 点击「连接」', true);
+</script>
+</body>
+</html>
