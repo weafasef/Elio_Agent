@@ -521,12 +521,12 @@ fn strip_think_tags(text: &str) -> String {
 fn strip_first_speech_block(text: &str) -> String {
     if let Some(en_start) = text.find("<en>") {
         if let Some(en_end_rel) = text[en_start..].find("</en>") {
-            let en_end = en_start + en_end_rel + 6;
+            let en_end = en_start + en_end_rel + "</en>".len();
             // 找 </en> 后的第一个 <zh>
             if let Some(zh_start_rel) = text[en_end..].find("<zh>") {
                 let zh_start = en_end + zh_start_rel;
                 if let Some(zh_end_rel) = text[zh_start..].find("</zh>") {
-                    let zh_end = zh_start + zh_end_rel + 6;
+                    let zh_end = zh_start + zh_end_rel + "</zh>".len();
                     let mut result = String::with_capacity(text.len());
                     result.push_str(&text[..en_start]);
                     result.push_str(&text[zh_end..]);

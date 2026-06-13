@@ -205,7 +205,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let files = vec![
             ("identity.txt", "你是 Elio，一个电子生命体。"),
-            ("language.txt", "使用日语思考，中文解释。"),
+            ("language.txt", "使用英语交流，语气亲切柔和。"),
             ("speech_blocks.txt", "<think>思考</think>"),
             ("worldview.txt", "时钟机制，时间感知。"),
             ("loyalty.txt", "绝对忠诚。"),
@@ -235,7 +235,7 @@ mod tests {
         pm.load_all().unwrap();
         let intro = pm.assemble_intro();
         assert!(intro.contains("Elio"));
-        assert!(intro.contains("日语"));
+        assert!(intro.contains("英语"));
     }
 
     #[test]

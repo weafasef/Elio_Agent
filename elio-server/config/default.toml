@@ -13,8 +13,6 @@ dir = "data/memory"
 [tts]
 enabled = true
 base_url = "http://127.0.0.1:9880"
-voice = "可琳"
-default_emotion = "happy"
 ref_audio_dir = "D:/VS_python/TTS/可琳/v4/可琳/reference_audios/中文/emotions"
 lang = "ja"
 streaming = true

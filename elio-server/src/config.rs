@@ -25,10 +25,6 @@ pub struct MemoryConfig {
 pub struct TtsConfig {
     pub enabled: bool,
     pub base_url: String,
-    pub voice: String,
-    /// 默认情感（happy / sad / neutral / surprise ...）
-    #[serde(default = "default_emotion")]
-    pub default_emotion: String,
     /// 参考音频目录（按 emotion 查找 .wav 文件）
     pub ref_audio_dir: Option<String>,
     /// TTS 合成语言（ja / zh）
@@ -39,7 +35,6 @@ pub struct TtsConfig {
     pub streaming: bool,
 }
 
-fn default_emotion() -> String { "happy".into() }
 fn default_lang() -> String { "ja".into() }
 fn default_true() -> bool { true }
 
@@ -60,13 +55,6 @@ impl Config {
         let content = std::fs::read_to_string(&default_path)
             .map_err(|e| ConfigError::ReadFailed(default_path.clone(), e))?;
 
-        toml::from_str(&content).map_err(|e| ConfigError::Parse(e))
-    }
-
-    /// 从指定路径加载
-    pub fn load_from(path: &PathBuf) -> Result<Self, ConfigError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| ConfigError::ReadFailed(path.clone(), e))?;
         toml::from_str(&content).map_err(|e| ConfigError::Parse(e))
     }
 

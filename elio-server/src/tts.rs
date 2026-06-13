@@ -43,12 +43,6 @@ struct RefAudio {
     text: String,
 }
 
-/// 语音合成结果（非流式）
-#[derive(Debug)]
-pub struct TtsResult {
-    pub audio_bytes: Vec<u8>,
-}
-
 /// 语音标签解析结果
 #[derive(Debug)]
 pub struct SpeechBlocks {
@@ -158,50 +152,6 @@ impl TtsService {
                 false
             }
         }
-    }
-
-    /// 非流式合成（简单场景，返回完整 WAV）
-    pub async fn synthesize(&self, text: &str) -> Result<Vec<u8>, TtsError> {
-        let url = format!("{}/tts", self.config.base_url.trim_end_matches('/'));
-
-        // 获取参考音频
-        let ref_audio = self.get_ref_audio("default").await;
-
-        let mut body = serde_json::json!({
-            "text": text,
-            "text_lang": self.config.lang,
-            "media_type": "wav",
-            "streaming_mode": false,
-        });
-
-        if let Some(ref ra) = ref_audio {
-            body["ref_audio_path"] = serde_json::json!(ra.path.to_string_lossy().replace('\\', "/"));
-            body["prompt_text"] = serde_json::json!(ra.text);
-            body["prompt_lang"] = serde_json::json!(self.config.lang);
-        }
-
-        let resp = self
-            .client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| TtsError::RequestFailed(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let err_text = resp.text().await.unwrap_or_default();
-            return Err(TtsError::RequestFailed(format!("HTTP {status}: {err_text}")));
-        }
-
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| TtsError::RequestFailed(e.to_string()))?
-            .to_vec();
-
-        debug!("[TTS] 非流式合成: {} 字节音频", bytes.len());
-        Ok(bytes)
     }
 
     /// 流式合成 — 每句话通过回调返回独立 WAV
@@ -386,19 +336,6 @@ impl TtsService {
         Ok(bytes)
     }
 
-    /// 用共享 WAV header 和 PCM 构建完整 WAV 文件字节
-    fn build_wav(header: &[u8], pcm: &[u8]) -> Vec<u8> {
-        let mut wav = header.to_vec();
-        // 更新 RIFF chunk size (offset 4): 36 + pcm.len()
-        let riff_size = 36u32 + pcm.len() as u32;
-        wav[4..8].copy_from_slice(&riff_size.to_le_bytes());
-        // 更新 data chunk size (offset 40)
-        let data_size = pcm.len() as u32;
-        wav[40..44].copy_from_slice(&data_size.to_le_bytes());
-        wav.extend_from_slice(pcm);
-        wav
-    }
-
     /// 获取情感对应的参考音频（带 fallback 链）
     async fn get_ref_audio(&self, emotion: &str) -> Option<RefAudio> {
         let map = self.ref_audios.lock().await;
@@ -481,8 +418,6 @@ pub fn parse_speech_blocks(text: &str) -> Option<SpeechBlocks> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TtsError {
-    #[error("TTS 服务不可用")]
-    NotAvailable,
     #[error("请求失败: {0}")]
     RequestFailed(String),
 }
