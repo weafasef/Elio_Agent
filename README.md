@@ -26,10 +26,16 @@ Elio 是一个持续运行的桌面 AI 伴侣，拥有自主感知-决策-行动
 └───────────────────────────────────────────────────────────────┘
         │                              │
         ▼                              ▼
-┌─ DeepSeek API ──────────┐   ┌─ GPT-SoVITS ──────────┐
-│  /v1/messages            │   │  api_v2.py :9880       │
-│  (Anthropic 兼容)        │   │  流式 WAV 合成          │
+┌─ DeepSeek API ──────────┐   ┌─ llama.cpp (Sight) ───┐
+│  /v1/messages            │   │  /v1/chat/completions   │
+│  (LLM 主推理)             │   │  JoyCaption VLM (Sight) │
 └──────────────────────────┘   └────────────────────────┘
+        │                              │
+        ▼                              ▼
+┌─ GPT-SoVITS ────────────┐
+│  api_v2.py :9880        │
+│  流式 WAV 合成 (TTS)     │
+└──────────────────────────┘
 ```
 
 **核心设计**: Elio 不即时回复用户消息。用户消息只进入世界观缓冲，由 30s 心跳统一驱动感知、思考和回复。
@@ -327,6 +333,76 @@ WorldviewBuffer
 [🔧 工具] 工具 search 已执行完毕（耗时 3.2s）
 [⏰ 定时] 定时心跳 — 30秒已过去
 </worldview>
+```
+
+---
+
+## 视觉感知 (Sight)
+
+Sight 是 Elio 的视觉感官——每个心跳周期通过截图 + 本地 VLM 模型获取屏幕描述，作为 worldview 的五感之一。
+
+### 架构
+
+```
+Sight 后台循环 (独立 tokio task)
+  │
+  ├─> PowerShell 截图 (Screen.Primary + Graphics.CopyFromScreen)
+  ├─> 缩放到 1024px (System.Drawing.Bitmap resize)
+  ├─> 存 PNG 临时文件, 转 base64
+  ├─> Python urllib → llama-server /v1/chat/completions
+  │       └─> JoyCaption (Llama-3.1-8B + Siglip2, GGUF Q4_K_M)
+  │              └─> 返回 {"choices"[0]["message"]["content"]: "..."}
+  └─> 写入 sight_buf (Arc<Mutex<Option<String>>>)
+         └─> 心跳循环读取 → worldview.set_sight()
+
+成功后等 15s 再截下一张，失败递增重试间隔。
+```
+
+### 世界观输出示例
+
+```
+<worldview>
+当前时间: 2026/06/13 19:47:00（傍晚）
+已持续运行: 12 分钟
+👁 Sight: 这张截图显示的是一个代码编辑器的界面，左侧有菜单栏，
+  右侧显示黑色背景的代码区域，包含多种颜色标记的语法高亮...
+💬 用户: 帮我看看这段代码
+</worldview>
+```
+
+### 依赖
+
+| 组件 | 说明 |
+|------|------|
+| **llama-server** | llama.cpp CUDA 13.3 二进制，加载 JoyCaption 模型 |
+| **JoyCaption 模型** | Llama-3.1-8B + Siglip2, Q4_K_M GGUF (~4.6GB) + mmproj (~838MB) |
+| **PowerShell** | 截图（System.Windows.Forms） |
+| **Python urllib** | 发 HTTP 请求（reqwest 与 llama-server HTTP 栈不兼容，回 502） |
+
+### Sight 数据流
+
+```
+llama-server.exe (port 8080)
+    │ POST /v1/chat/completions
+    │ { "messages": [{ "role": "user", "content": [
+    │     {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
+    │     {"type": "text", "text": "请描述这张截图"}
+    │ ]}]}
+    │
+    ▼
+sight_buf: Arc<Mutex<Option<String>>>
+    │ 心跳读取
+    ▼
+worldview.set_sight(desc)
+```
+
+### 配置
+
+```toml
+# elio-server/config/default.toml
+[vision]
+enabled = true                   # 是否启用视觉感知
+base_url = "http://127.0.0.1:8080"  # llama-server 地址
 ```
 
 ---

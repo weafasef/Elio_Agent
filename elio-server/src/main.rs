@@ -97,6 +97,35 @@ async fn main() -> anyhow::Result<()> {
     // 提取地址信息
     let addr = format!("{}:{}", config.server.host, config.server.port);
 
+    // 👁 Sight 后台循环：持续截图 → llama-server → 更新共享缓冲区
+    let sight_buf: Arc<tokio::sync::Mutex<Option<String>>> = Arc::new(tokio::sync::Mutex::new(None));
+    let vision_config = config.vision.clone();
+    if vision_config.enabled {
+        let sight_buf_clone = Arc::clone(&sight_buf);
+        tokio::spawn(async move {
+            // 等 3 秒让 llama-server 完全就绪
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            let mut retries: u32 = 0;
+            loop {
+                match fetch_sight(&vision_config.base_url).await {
+                    Ok(desc) => {
+                        retries = 0;
+                        tracing::info!("[sight] 描述已更新 ({:.80}...)", desc);
+                        *sight_buf_clone.lock().await = Some(desc);
+                        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                    }
+                    Err(e) => {
+                        retries += 1;
+                        tracing::warn!("[sight] 获取失败 (重试#{retries}): {e}");
+                        // 重试间隔递增: 3s, 6s, 10s, 15s...
+                        let delay = std::time::Duration::from_secs((retries * 3).min(30) as u64);
+                        tokio::time::sleep(delay).await;
+                    }
+                }
+            }
+        });
+    }
+
     // 创建 broadcast channel 用于推送 Elio 回复到 WS 客户端
     let (response_tx, _) = tokio::sync::broadcast::channel::<String>(64);
 
@@ -144,6 +173,11 @@ async fn main() -> anyhow::Result<()> {
             // 1. 定时器 tick（推 Timer 感知 + system tick 到对话）
             let mut guard = session.inner.lock().await;
             guard.on_timer_tick();
+
+            // 👁 Sight: 从共享缓冲区读取最新截屏描述
+            if let Some(desc) = sight_buf.lock().await.as_ref() {
+                guard.worldview.set_sight(desc.clone());
+            }
             drop(guard);
 
             // 2. 单次 step（流式 — 逐 delta 实时广播文本到客户端）
@@ -404,6 +438,130 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+/// 👁 截图 → llama-server → 描述文本
+async fn fetch_sight(llama_url: &str) -> Result<String, String> {
+    tracing::info!("[sight] 📸 截图中...");
+    let max_size = 1024;
+
+    // 1. PowerShell 截图，缩放到 max_size，存为 PNG 临时文件
+    let tmp_path = std::env::temp_dir().join("elio_sight.png");
+    let tmp_path_str = tmp_path.to_string_lossy().replace('\\', "\\\\");
+    let ps_script = format!(r#"
+Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+$screen = [System.Windows.Forms.Screen]::PrimaryScreen
+$w = $screen.Bounds.Width; $h = $screen.Bounds.Height
+$bmp = New-Object System.Drawing.Bitmap($w, $h)
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.CopyFromScreen(0, 0, 0, 0, (New-Object System.Drawing.Size($w, $h)))
+$g.Dispose()
+$max = [Math]::Max($w, $h)
+if ($max -gt {max_size}) {{
+    $ratio = {max_size} / $max
+    $nw = [int]($w * $ratio); $nh = [int]($h * $ratio)
+    $small = New-Object System.Drawing.Bitmap($bmp, $nw, $nh)
+    $bmp.Dispose()
+    $bmp = $small
+}}
+$bmp.Save('{tmp_path_str}', [System.Drawing.Imaging.ImageFormat]::Png)
+$bmp.Dispose()
+"#);
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &ps_script])
+        .output()
+        .map_err(|e| format!("截图失败: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("PowerShell 截图失败: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+
+    // 2. 读 PNG → base64
+    let png_bytes = std::fs::read(&tmp_path)
+        .map_err(|e| format!("读取截图文件失败: {e}"))?;
+    let img_kb = png_bytes.len() as f64 / 1024.0;
+    let img_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        &png_bytes,
+    );
+
+    tracing::info!("[sight] 🤖 发送截图 ({:.0}KB) 到 llama-server...", img_kb);
+
+    // 3. 构建请求体
+    let body = serde_json::json!({
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{img_b64}")}},
+                {"type": "text", "text": "请用中文详细描述这张截图的内容。"},
+            ],
+        }],
+        "max_tokens": 512,
+        "temperature": 0.3,
+        "stream": false,
+    });
+    let body_str = serde_json::to_string(&body).map_err(|e| format!("JSON 序列化失败: {e}"))?;
+
+    // 4. 通过 Python urllib 发请求（把 JSON 写入临时文件，Python 读文件后发送）
+    let body_path = std::env::temp_dir().join("elio_sight_body.json");
+    std::fs::write(&body_path, &body_str).map_err(|e| format!("写入请求体失败: {e}"))?;
+    let body_path_str = body_path.to_string_lossy().replace('\\', "/");
+    let llama_url_owned = llama_url.to_string();
+
+    let t0 = std::time::Instant::now();
+    let output = std::process::Command::new("python")
+        .env("PYTHONIOENCODING", "utf-8")
+        .args(["-c", &format!(r#"
+import urllib.request, json, sys
+with open(r'{body_path_str}', 'r', encoding='utf-8') as f:
+    body = f.read()
+req = urllib.request.Request(
+    '{llama_url_owned}/v1/chat/completions',
+    data=body.encode('utf-8'),
+    headers={{'Content-Type': 'application/json'}}
+)
+try:
+    resp = urllib.request.urlopen(req, timeout=120)
+    out = resp.read().decode('utf-8')
+    print(resp.status)
+    print(out, end='')
+except Exception as e:
+    print(f'ERROR:{{e}}', file=sys.stderr)
+    sys.exit(1)
+"#)])
+        .output()
+        .map_err(|e| format!("Python 调用失败: {e}"))?;
+
+    let elapsed = t0.elapsed();
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Python 错误: {:.300}", stderr));
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let mut lines = output_str.lines();
+    let status_code: u16 = lines.next().unwrap_or("0").parse().unwrap_or(0);
+    let text = lines.collect::<Vec<_>>().join("\n");
+
+    tracing::info!("[sight] HTTP {} len={} ({:.1}s)", status_code, text.len(), elapsed.as_secs_f64());
+
+    if status_code != 200 {
+        return Err(format!("llama-server HTTP {}: {:.300}", status_code, text));
+    }
+
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("JSON 解析失败: {e}"))?;
+
+    let desc = json["choices"][0]["message"]["content"]
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .ok_or_else(|| String::from("响应缺少 choices[0].message.content"))?;
+
+    let tokens = json["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+    tracing::info!("[sight] ✅ 完成 ({:.1}s, {} tokens): {:.100}...", elapsed.as_secs_f64(), tokens, desc);
+
+    let _ = std::fs::remove_file(&tmp_path);
+    let _ = std::fs::remove_file(&body_path);
+    Ok(desc)
+}
 
     let app = routes::create_routes()
         .route("/ws", get(ws_handler))

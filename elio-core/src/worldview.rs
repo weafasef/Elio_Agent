@@ -11,6 +11,8 @@ pub struct WorldviewBuffer {
     max_slices: usize,
     /// 启动时间
     start_time: SystemTime,
+    /// 👁 Sight — 视觉感知（截屏描述），每心跳更新
+    sight: Option<String>,
 }
 
 /// 单个感知
@@ -44,6 +46,7 @@ impl WorldviewBuffer {
             recent_slices: VecDeque::with_capacity(max_slices + 1),
             max_slices,
             start_time: SystemTime::now(),
+            sight: None,
         }
     }
 
@@ -82,6 +85,16 @@ impl WorldviewBuffer {
         !self.pending.is_empty()
     }
 
+    /// 👁 设置视觉感知（截屏描述）
+    pub fn set_sight(&mut self, text: String) {
+        self.sight = Some(text);
+    }
+
+    /// 清除视觉感知
+    pub fn clear_sight(&mut self) {
+        self.sight = None;
+    }
+
     /// 构建完整世界观文本（含时间 + 运行时长 + 外部感知）
     pub fn build_worldview(&self) -> String {
         // 1. 当前时间
@@ -90,11 +103,23 @@ impl WorldviewBuffer {
         // 2. 运行时长
         let uptime_str = format_uptime(self.start_time);
 
-        // 3. 近期感知摘要
+        // 3. 👁 Sight（视觉感知）
+        let sight_str = self.sight.as_ref()
+            .map(|s| format!("👁 Sight: {s}"))
+            .unwrap_or_default();
+
+        // 4. 近期感知摘要
         let percepts_str = self.format_recent_percepts(3);
 
+        let mut parts = vec![time_str, uptime_str];
+        if !sight_str.is_empty() {
+            parts.push(sight_str);
+        }
+        parts.push(percepts_str);
+
         format!(
-            "<worldview>\n{time_str}\n{uptime_str}\n{percepts_str}\n</worldview>"
+            "<worldview>\n{}\n</worldview>",
+            parts.join("\n")
         )
     }
 
@@ -129,6 +154,7 @@ impl WorldviewBuffer {
     pub fn clear(&mut self) {
         self.pending.clear();
         self.recent_slices.clear();
+        self.sight = None;
         self.start_time = SystemTime::now();
     }
 

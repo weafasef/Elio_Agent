@@ -37,6 +37,18 @@ pub struct TtsConfig {
 
 fn default_lang() -> String { "ja".into() }
 fn default_true() -> bool { true }
+fn default_false() -> bool { false }
+fn default_vision_url() -> String { "http://127.0.0.1:8080".into() }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VisionConfig {
+    /// 是否启用视觉感知（截屏描述注入 worldview）
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    /// llama-server 地址（直接调 /v1/chat/completions）
+    #[serde(default = "default_vision_url")]
+    pub base_url: String,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -44,6 +56,7 @@ pub struct Config {
     pub llm: LlmConfig,
     pub memory: MemoryConfig,
     pub tts: TtsConfig,
+    pub vision: VisionConfig,
 }
 
 impl Config {

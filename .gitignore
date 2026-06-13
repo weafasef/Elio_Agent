@@ -4,3 +4,15 @@ Cargo.lock
 __pycache__/
 elio-server/config/default.toml
 logs/*.jsonl
+
+# 模型文件（体积过大）
+models/
+
+# Python 脚本（开发辅助，非项目核心）
+scripts/
+
+# 临时文件
+data/
+*.tmp
+elio_sight.png
+elio_sight_body.json
