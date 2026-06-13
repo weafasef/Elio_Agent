@@ -164,6 +164,8 @@ pub const EVENT_ELIO_RESPONSE: &str = "elio.response";
 pub const EVENT_SYSTEM_HEARTBEAT: &str = "system.heartbeat";
 pub const EVENT_API_REQUEST: &str = "api.request";
 pub const EVENT_API_RESPONSE: &str = "api.response";
+pub const EVENT_MEMORY_INPUT: &str = "memory.input";
+pub const EVENT_MEMORY_OUTPUT: &str = "memory.output";
 
 #[cfg(test)]
 mod tests {

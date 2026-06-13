@@ -154,9 +154,16 @@ impl MainLoop {
             event_type: crate::memory::EventType::UserMessage,
             session_id: Some(self.config.model.clone()),
         });
+        // 日志：记忆输入
+        self.logger.log(
+            crate::log::EVENT_MEMORY_INPUT,
+            text,
+            Some("memory"),
+        );
+
         self.worldview.push(text, PerceptSource::User);
 
-        // 日志
+        // 日志：用户消息
         self.logger.log(
             crate::log::EVENT_USER_MESSAGE,
             text,
@@ -193,6 +200,14 @@ impl MainLoop {
             system_prompt.push_str(&worldview_text);
         }
         let mem_ctx = self.memory.get_context();
+
+        // 日志：记忆输出
+        self.logger.log(
+            crate::log::EVENT_MEMORY_OUTPUT,
+            &mem_ctx,
+            Some("memory"),
+        );
+
         if !mem_ctx.is_empty() {
             system_prompt.push_str("\n\n## 记忆上下文\n");
             system_prompt.push_str(&mem_ctx);
@@ -284,12 +299,27 @@ impl MainLoop {
             system_prompt.push_str(&worldview_text);
         }
         let mem_ctx = self.memory.get_context();
+
+        // 日志：记忆输出
+        self.logger.log(
+            crate::log::EVENT_MEMORY_OUTPUT,
+            &mem_ctx,
+            Some("memory"),
+        );
+
         if !mem_ctx.is_empty() {
             system_prompt.push_str("\n\n## 记忆上下文\n");
             system_prompt.push_str(&mem_ctx);
         }
 
         self.state = LoopState::Thinking;
+
+        // 日志：记录完整 prompt（身份 + 世界观 + 记忆上下文）
+        self.logger.log(
+            crate::log::EVENT_SYSTEM_PROMPT,
+            &system_prompt,
+            Some("system"),
+        );
 
         let request = ChatRequest {
             model: self.config.model.clone(),
@@ -374,11 +404,18 @@ impl MainLoop {
         );
 
         let status = if result.is_error { "失败" } else { "成功" };
+        let mem_text = format!("工具 {name} 执行{status}: {result_text}");
         self.memory.record_event(MemoryEvent {
-            text: format!("工具 {name} 执行{status}: {result_text}"),
+            text: mem_text.clone(),
             event_type: crate::memory::EventType::ToolResult,
             session_id: None,
         });
+        // 日志：记忆输入（工具结果）
+        self.logger.log(
+            crate::log::EVENT_MEMORY_INPUT,
+            &mem_text,
+            Some("memory"),
+        );
     }
 
     /// 定时记忆维护 tick

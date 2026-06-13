@@ -126,17 +126,15 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // 心跳任务（每 30s 推送 Timer 感知 + 调用 step() → 广播结果到所有 WS 客户端）
+    // 连续步进循环：每 30s 至少调一次 step_stream，启动后立即首次调用
     let heartbeat_state = Arc::clone(&app_state);
     let heartbeat_tx = response_tx.clone();
     let heartbeat_tts = tts_service.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
-        // 首次 tick 立即触发，不需要等 30s
-        interval.tick().await;
+        // 首次 step 立即触发，后续每次间隔至少 30s
         loop {
-            interval.tick().await;
-            tracing::debug!("heartbeat tick");
+            let step_start = std::time::Instant::now();
+            tracing::debug!("elio step loop");
 
             let session = match heartbeat_state.session_mgr.get_default() {
                 Some(s) => s,
@@ -252,6 +250,24 @@ async fn main() -> anyhow::Result<()> {
                 elio_core::mainloop::StepResult::Response(text) => {
                     tracing::info!("Elio 回复: {:.100}", text);
 
+                    // 解析并打印各区块
+                    let think_blocks: Vec<&str> = text
+                        .split("<think>").skip(1)
+                        .filter_map(|s| s.split("</think>").next())
+                        .map(|s| s.trim())
+                        .collect();
+                    let think_text = think_blocks.join("\n---\n");
+                    if !think_text.is_empty() {
+                        tracing::info!("<think>\n{}\n</think>", think_text);
+                    }
+                    let tts_text = strip_think_tags(&text);
+                    if let Some(speech) = tts::parse_speech_blocks(&tts_text) {
+                        tracing::info!("<en>\n{}\n</en>", speech.en);
+                        if !speech.zh.is_empty() {
+                            tracing::info!("<zh>\n{}\n</zh>", speech.zh);
+                        }
+                    }
+
                     // 标记文本流结束
                     let _ = heartbeat_tx.send(
                         serde_json::json!({
@@ -261,11 +277,17 @@ async fn main() -> anyhow::Result<()> {
                     );
 
                     // ── TTS 语音合成（后台异步，不阻塞心跳） ──────────────
-                    // Phase 2 如果已提前启动 TTS（检测到 </en>），跳过旧路径避免重复
+                    // Phase 2 已合成第一段 → 去掉第一段再合成剩余段落
+                    // Phase 2 没跑          → 正常合成全部段落
                     let tts_text = strip_think_tags(&text);
-                    if !tts_started.load(std::sync::atomic::Ordering::Relaxed)
-                        && let Some(ref tts) = heartbeat_tts {
-                        if let Some(speech) = tts::parse_speech_blocks(&tts_text) {
+                    if let Some(ref tts) = heartbeat_tts {
+                        let parse_text = if tts_started.load(std::sync::atomic::Ordering::Relaxed) {
+                            strip_first_speech_block(&tts_text)
+                        } else {
+                            tts_text.clone()
+                        };
+                        if !parse_text.trim().is_empty() {
+                            if let Some(speech) = tts::parse_speech_blocks(&parse_text) {
                             let tts = tts.clone();
                             let tx = heartbeat_tx.clone();
                             let en_text = speech.en;
@@ -297,6 +319,7 @@ async fn main() -> anyhow::Result<()> {
                                     Err(e) => tracing::warn!("TTS 合成失败: {e}"),
                                 }
                             });
+                            }
                         }
                     }
                 }
@@ -373,6 +396,12 @@ async fn main() -> anyhow::Result<()> {
             // 3. 记忆维护 tick（慢路径推理）
             let mut guard = session.inner.lock().await;
             guard.memory_tick().await;
+
+            // 4. 保证两次 step 之间至少间隔 30s
+            let elapsed = step_start.elapsed();
+            if elapsed < std::time::Duration::from_secs(30) {
+                tokio::time::sleep(std::time::Duration::from_secs(30) - elapsed).await;
+            }
         }
     });
 
@@ -485,6 +514,33 @@ fn strip_think_tags(text: &str) -> String {
         i += 1;
     }
     result.trim().to_string()
+}
+
+/// 去掉第一个 <en>...</en><zh>...</zh> 对
+/// Phase 2 已合成第一段后，主路径用此函数去掉第一段，只合成剩余段落
+fn strip_first_speech_block(text: &str) -> String {
+    if let Some(en_start) = text.find("<en>") {
+        if let Some(en_end_rel) = text[en_start..].find("</en>") {
+            let en_end = en_start + en_end_rel + 6;
+            // 找 </en> 后的第一个 <zh>
+            if let Some(zh_start_rel) = text[en_end..].find("<zh>") {
+                let zh_start = en_end + zh_start_rel;
+                if let Some(zh_end_rel) = text[zh_start..].find("</zh>") {
+                    let zh_end = zh_start + zh_end_rel + 6;
+                    let mut result = String::with_capacity(text.len());
+                    result.push_str(&text[..en_start]);
+                    result.push_str(&text[zh_end..]);
+                    return result.trim().to_string();
+                }
+            }
+            // 没有 <zh>，只去掉到 </en>
+            let mut result = String::with_capacity(text.len());
+            result.push_str(&text[..en_start]);
+            result.push_str(&text[en_end..]);
+            return result.trim().to_string();
+        }
+    }
+    text.to_string()
 }
 
 /// 流式版本: 逐块剥离 <think>...</think> 内容
