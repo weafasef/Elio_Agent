@@ -60,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut graph_memory = GraphMemorySystem::new(Some(memory_dir.clone()), None);
     if let Err(e) = graph_memory.load() {
-        tracing::warn!("加载记忆失败（将使用空白记忆）: {e}");
+        tracing::warn!("[记忆] 加载失败（将使用空白记忆）: {e}");
     }
     let mem_stats = graph_memory.stats();
     info!("记忆状态: {} 事件, {} 边", mem_stats.event_count, mem_stats.edge_count);
@@ -74,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
     }
     info!("已加载 {} 个提示词文件", prompt_mgr.loaded_count());
     if let Err(missing) = prompt_mgr.check_required() {
-        tracing::warn!("缺少提示词文件: {:?}", missing);
+        tracing::warn!("[系统] 缺少提示词文件: {:?}", missing);
     }
     let system_prompt = prompt_mgr.build_system_prompt(None);
 
@@ -110,13 +110,13 @@ async fn main() -> anyhow::Result<()> {
                 match fetch_sight(&vision_config.base_url).await {
                     Ok(desc) => {
                         retries = 0;
-                        tracing::info!("[sight] 描述已更新 ({:.80}...)", desc);
+                        tracing::info!("[视觉] 描述已注入 worldview ({:.80}...)", desc);
                         *sight_buf_clone.lock().await = Some(desc);
                         tokio::time::sleep(std::time::Duration::from_secs(15)).await;
                     }
                     Err(e) => {
                         retries += 1;
-                        tracing::warn!("[sight] 获取失败 (重试#{retries}): {e}");
+                        tracing::warn!("[视觉] 获取失败 (重试#{retries}): {e}");
                         // 重试间隔递增: 3s, 6s, 10s, 15s...
                         let delay = std::time::Duration::from_secs((retries * 3).min(30) as u64);
                         tokio::time::sleep(delay).await;
@@ -163,7 +163,7 @@ async fn main() -> anyhow::Result<()> {
         // 首次 step 立即触发，后续每次间隔至少 30s
         loop {
             let step_start = std::time::Instant::now();
-            tracing::debug!("elio step loop");
+            tracing::debug!("[心跳] step loop");
 
             let session = match heartbeat_state.session_mgr.get_default() {
                 Some(s) => s,
@@ -282,7 +282,7 @@ async fn main() -> anyhow::Result<()> {
 
             match step_result {
                 elio_core::mainloop::StepResult::Response(text) => {
-                    tracing::info!("Elio 回复: {:.100}", text);
+                    tracing::info!("[Elio] 回复: {:.100}", text);
 
                     // 解析并打印各区块
                     let think_blocks: Vec<&str> = text
@@ -292,13 +292,13 @@ async fn main() -> anyhow::Result<()> {
                         .collect();
                     let think_text = think_blocks.join("\n---\n");
                     if !think_text.is_empty() {
-                        tracing::info!("<think>\n{}\n</think>", think_text);
+                        tracing::info!("[Elio] <think>\n{}\n</think>", think_text);
                     }
                     let tts_text = strip_think_tags(&text);
                     if let Some(speech) = tts::parse_speech_blocks(&tts_text) {
-                        tracing::info!("<en>\n{}\n</en>", speech.en);
+                        tracing::info!("[Elio] <en>\n{}\n</en>", speech.en);
                         if !speech.zh.is_empty() {
-                            tracing::info!("<zh>\n{}\n</zh>", speech.zh);
+                            tracing::info!("[Elio] <zh>\n{}\n</zh>", speech.zh);
                         }
                     }
 
@@ -329,7 +329,7 @@ async fn main() -> anyhow::Result<()> {
                             let zh_text = speech.zh;
                             let emotion = speech.emotion;
                             tokio::spawn(async move {
-                                tracing::info!("TTS 合成: emotion={emotion}, en=「{:.60}」", en_text);
+                                tracing::info!("[TTS] 合成: emotion={emotion}, en=「{:.60}」", en_text);
                                 let result = tts.synthesize_stream(
                                     &en_text,
                                     &emotion,
@@ -349,8 +349,8 @@ async fn main() -> anyhow::Result<()> {
                                     },
                                 ).await;
                                 match result {
-                                    Ok(n) => tracing::info!("TTS 完成: {n} 个分片"),
-                                    Err(e) => tracing::warn!("TTS 合成失败: {e}"),
+                                    Ok(n) => tracing::info!("[TTS] 完成: {n} 个分片"),
+                                    Err(e) => tracing::warn!("[TTS] 合成失败: {e}"),
                                 }
                             });
                             }
@@ -358,7 +358,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 elio_core::mainloop::StepResult::ToolCall(name, input, id) => {
-                    tracing::info!("Elio 调用工具: {name}");
+                    tracing::info!("[Elio] 调用工具: {name}");
                     let tool = {
                         let guard = session.inner.lock().await;
                         guard.tools.get(&name).cloned()
@@ -417,7 +417,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 elio_core::mainloop::StepResult::Idle => {}
                 elio_core::mainloop::StepResult::Error(e) => {
-                    tracing::warn!("Elio step 错误: {e}");
+                    tracing::warn!("[Elio] step 错误: {e}");
                     let error = serde_json::json!({
                         "type": "error",
                         "message": e,
@@ -441,7 +441,7 @@ async fn main() -> anyhow::Result<()> {
 
 /// 👁 截图 → llama-server → 描述文本
 async fn fetch_sight(llama_url: &str) -> Result<String, String> {
-    tracing::info!("[sight] 📸 截图中...");
+    tracing::info!("[视觉] 截图中...");
     let max_size = 1024;
 
     // 1. PowerShell 截图，缩放到 max_size，存为 PNG 临时文件
@@ -483,7 +483,7 @@ $bmp.Dispose()
         &png_bytes,
     );
 
-    tracing::info!("[sight] 🤖 发送截图 ({:.0}KB) 到 llama-server...", img_kb);
+    tracing::info!("[视觉] 发送截图 ({:.0}KB) 到 llama-server...", img_kb);
 
     // 3. 构建请求体
     let body = serde_json::json!({
@@ -541,7 +541,7 @@ except Exception as e:
     let status_code: u16 = lines.next().unwrap_or("0").parse().unwrap_or(0);
     let text = lines.collect::<Vec<_>>().join("\n");
 
-    tracing::info!("[sight] HTTP {} len={} ({:.1}s)", status_code, text.len(), elapsed.as_secs_f64());
+    tracing::info!("[视觉] HTTP {} len={} ({:.1}s), 解析中...", status_code, text.len(), elapsed.as_secs_f64());
 
     if status_code != 200 {
         return Err(format!("llama-server HTTP {}: {:.300}", status_code, text));
@@ -556,7 +556,7 @@ except Exception as e:
         .ok_or_else(|| String::from("响应缺少 choices[0].message.content"))?;
 
     let tokens = json["usage"]["completion_tokens"].as_u64().unwrap_or(0);
-    tracing::info!("[sight] ✅ 完成 ({:.1}s, {} tokens): {:.100}...", elapsed.as_secs_f64(), tokens, desc);
+    tracing::info!("[视觉] 解析完成 ({:.1}s, {} tokens):\n  -> {:.200}", elapsed.as_secs_f64(), tokens, desc);
 
     let _ = std::fs::remove_file(&tmp_path);
     let _ = std::fs::remove_file(&body_path);
@@ -592,7 +592,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>, rx: tokio::sync:
     if let Some(session) = state.session_mgr.get_default() {
         ws::handle_ws(socket, &session, rx).await;
     } else {
-        tracing::error!("没有可用会话");
+        tracing::error!("[系统] 没有可用会话");
     }
 }
 

@@ -147,7 +147,7 @@ impl<'de> Deserialize<'de> for RelationType {
                 return Ok(RelationType::RelatedTo);
             }
             other => {
-                tracing::warn!("未知关系类型: {other}，视为 related_to");
+                tracing::warn!("[记忆] 未知关系类型: {other}，视为 related_to");
                 RelationType::RelatedTo
             }
         })

@@ -43,7 +43,7 @@ impl SessionManager {
     }
 
     pub fn create_default(&mut self, config: MainLoopConfig, memory: Box<dyn MemorySystem>, logger: Arc<AuditLogger>) -> Arc<Session> {
-        tracing::info!("创建默认会话");
+        tracing::info!("[系统] 创建默认会话");
         let session = Arc::new(Session::new(config, memory, logger));
         self.sessions.push(session.clone());
         session

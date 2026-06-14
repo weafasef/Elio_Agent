@@ -144,7 +144,7 @@ impl MemorySystem for GraphMemorySystem {
     async fn tick(&mut self) {
         match self.slow_path.tick(&mut self.store, &mut self.index) {
             SlowPathResult::Done { events_processed: n, edges_added: m } => {
-                tracing::debug!("SlowPath tick: {n} events, {m} edges");
+                tracing::debug!("[记忆] SlowPath tick: {n} events, {m} edges");
                 if let Some(narrative) = FastPath::synthesize_narrative(&self.store, &self.fast_config) {
                     self.context_bridge.set(narrative);
                 }
@@ -179,12 +179,12 @@ impl MemorySystem for GraphMemorySystem {
                         }
                         let stats = self.store.stats();
                         tracing::info!(
-                            "已加载记忆: {} 事件, {} 边, {} 关键词",
+                            "[记忆] 已加载: {} 事件, {} 边, {} 关键词",
                             stats.event_count, stats.edge_count, self.index.len()
                         );
                     }
                     Err(DiskError::Io(ref msg)) if msg.contains("events.jsonl") || msg.contains("No such file") => {
-                        tracing::info!("无现有记忆数据，从空白开始");
+                        tracing::info!("[记忆] 无现有数据，从空白开始");
                     }
                     Err(e) => return Err(e),
                 }
