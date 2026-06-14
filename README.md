@@ -40,32 +40,107 @@ Elio 是一个持续运行的桌面 AI 伴侣，拥有自主感知-决策-行动
 
 **核心设计**: Elio 不即时回复用户消息。用户消息只进入世界观缓冲，由 30s 心跳统一驱动感知、思考和回复。
 
-## 快速开始
+## 启动指南
 
-### 1. 启动服务器
+### 前置依赖
 
-```bash
-cd D:\VS_python\Elio_Agent_v2
-cargo run --bin elio-server
+| 依赖 | 版本要求 | 说明 |
+|------|---------|------|
+| **Rust** | 1.85+（2024 edition） | 编译所有核心组件 |
+| **Bun** | 最新版 | TTS 流式桥接（`scripts/tts-bridge.ts`） |
+| **Python** | 3.12+ | 视觉截图、日志查看器 |
+| **DeepSeek API Key** | — | 已配置在 `elio-server/config/default.toml` 中 |
+| **llama.cpp** | b9620+ (CUDA 13.3) | 视觉感知 VLM 推理服务 |
+| **JoyCaption 模型** | Q4_K_M GGUF | llama-server 加载的视觉描述模型（~4.6GB + mmproj ~838MB） |
+| **GPT-SoVITS** | v2 (cu124) | TTS 语音合成，本地 HTTP 服务 |
+| **WebView2** | Win11 内置 | Tauri 桌面窗口运行时 |
+
+### 完整启动流程（4 个终端）
+
+**终端 1 — 视觉感知 llama-server**
+
+```powershell
+# 下载并启动 llama-server（首次运行会自动下载模型）
+powershell -File scripts/setup_llama_cuda.ps1
 ```
+> 监听 `127.0.0.1:8080`，加载 JoyCaption VLM 模型。需要 NVIDIA 显卡 + CUDA。
 
-服务器默认监听 `127.0.0.1:3456`，需要 DeepSeek API key（已在 `config/default.toml` 中配置）。
-
-### 2. 启动 TTS（可选）
+**终端 2 — TTS 语音服务**
 
 ```bash
 cd D:\VS_python\TTS\GPT-SoVITS-1007-cu124
 runtime\python.exe api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
 ```
+> 监听 `127.0.0.1:9880`，提供流式 WAV 合成。
 
-### 3. 启动客户端
+**终端 3 — Elio 服务器**
 
 ```bash
+cd D:\VS_python\Elio_Agent_v2
+cargo run --bin elio-server
+```
+> 监听 `127.0.0.1:3456`。WebSocket: `ws://127.0.0.1:3456/ws/elio`。需要 DeepSeek API key。
+
+**终端 4 — Elio 桌面**
+
+```bash
+cd D:\VS_python\Elio_Agent_v2
+cargo run --bin elio-desktop
+```
+> 透明悬浮窗 + 托盘图标，自动连接服务器 WebSocket。
+
+### 最小启动（无视觉 + 无桌面）
+
+如果不需要视觉感知和桌面悬浮窗，只需启动：
+
+```bash
+# 终端 1 — 服务器
+cd D:\VS_python\Elio_Agent_v2
+cargo run --bin elio-server
+
+# 终端 2 — TTS（可选）
+cd D:\VS_python\TTS\GPT-SoVITS-1007-cu124
+runtime\python.exe api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
+
+# 终端 3 — 终端客户端（可选）
 cd D:\VS_python\Elio_Agent_v2
 cargo run --bin elio-client
 ```
 
-### 4. 查看日志
+### 配置
+
+编辑 `elio-server/config/default.toml`（从 `default.toml.example` 复制）：
+
+```toml
+[server]
+host = "127.0.0.1"
+port = 3456
+
+[llm]
+api_key = "sk-xxxxxxxx"
+base_url = "https://api.deepseek.com/anthropic"
+model = "deepseek-v4-flash"
+
+[tts]
+enabled = true
+base_url = "http://127.0.0.1:9880"
+ref_audio_dir = "D:/VS_python/TTS/GPT-SoVITS-1007-cu124/ref_audio"
+
+[vision]
+enabled = true
+base_url = "http://127.0.0.1:8080"
+```
+
+### 端口一览
+
+| 服务 | 端口 | 协议 |
+|------|------|------|
+| elio-server | **3456** | HTTP + WebSocket |
+| GPT-SoVITS (TTS) | **9880** | HTTP |
+| llama-server (视觉) | **8080** | HTTP |
+| 日志查看器 | — | GUI (tkinter) |
+
+### 查看日志
 
 ```bash
 python logs/logview_gui.py                    # 当前日志

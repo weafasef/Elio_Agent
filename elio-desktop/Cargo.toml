@@ -1,0 +1,19 @@
+[package]
+name = "elio-desktop"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "0.38"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

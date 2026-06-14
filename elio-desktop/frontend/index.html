@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Elio</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: transparent;
+    color: #e0e0e0;
+    overflow: hidden;
+    user-select: none;
+  }
+  #app {
+    width: 100vw; height: 100vh;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    position: relative;
+  }
+
+  /* 角色画布 */
+  #canvas-wrap {
+    position: relative;
+    background: transparent;
+    border-radius: 16px;
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+    pointer-events: auto;
+    -webkit-app-region: drag;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    pointer-events: none;
+  }
+
+  #subtitle {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    padding: 16px 20px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.6));
+    color: #fff; font-size: 16px; text-align: center;
+    min-height: 56px; pointer-events: none;
+    transition: opacity .3s;
+  }
+  #subtitle:empty { opacity: 0; }
+
+  /* 状态点 */
+  #status-mini {
+    position: absolute; top: 8px; right: 12px;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #555;
+    pointer-events: none;
+    z-index: 5;
+  }
+  #status-mini.on  { background: #2ecc71; box-shadow: 0 0 6px #2ecc71; }
+  #status-mini.talk { background: #f39c12; box-shadow: 0 0 8px #f39c12; animation: pulse .3s infinite; }
+  @keyframes pulse { 50% { opacity: .5; } }
+
+  /* 工具栏 */
+  #toolbar {
+    position: absolute; bottom: 12px; right: 12px;
+    display: flex; gap: 6px; z-index: 20;
+    -webkit-app-region: no-drag;
+  }
+  .tool-btn {
+    width: 30px; height: 30px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(30,30,50,0.85); color: #ccc;
+    font-size: 15px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: auto;
+    transition: background .2s;
+  }
+  .tool-btn:hover { background: rgba(60,60,100,0.9); color: #fff; }
+  .tool-btn.active { background: rgba(46,204,113,0.5); border-color: #2ecc71; }
+
+  /* 设置面板 */
+  #settings-panel {
+    position: absolute; top: 0; right: 0; bottom: 0;
+    width: 260px; background: rgba(20,20,40,0.95);
+    backdrop-filter: blur(12px);
+    border-left: 1px solid rgba(255,255,255,0.1);
+    padding: 20px 16px;
+    display: none;
+    flex-direction: column; gap: 14px;
+    z-index: 30;
+    pointer-events: auto;
+    overflow-y: auto;
+    -webkit-app-region: no-drag;
+  }
+  #settings-panel.open { display: flex; }
+
+  .settings-header {
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .settings-header h3 {
+    font-size: 14px; color: #e8d5b7; font-weight: 600;
+  }
+  #btn-close-settings {
+    width: 24px; height: 24px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.2);
+    background: rgba(30,30,50,0.85); color: #ccc;
+    font-size: 13px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .2s;
+  }
+  #btn-close-settings:hover { background: rgba(231,76,60,0.6); color: #fff; }
+
+  .setting-row {
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .setting-row label {
+    font-size: 11px; color: #888;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .setting-row label .val {
+    color: #e8d5b7; font-weight: 600; font-size: 12px;
+  }
+  .setting-row input[type="range"] {
+    width: 100%; accent-color: #e8d5b7;
+  }
+  .setting-divider {
+    border: none; border-top: 1px solid rgba(255,255,255,0.08);
+    margin: 4px 0;
+  }
+  #btn-reconnect {
+    width: 100%; padding: 6px;
+    border: 1px solid rgba(255,255,255,0.2); border-radius: 6px;
+    font-size: 12px; cursor: pointer;
+    background: rgba(46,204,113,0.3); color: #2ecc71;
+  }
+  #btn-reconnect:hover { background: rgba(46,204,113,0.5); }
+  #btn-reconnect.disconnected { background: rgba(231,76,60,0.3); color: #e74c3c; }
+
+  #settings-panel .info-text {
+    font-size: 10px; color: #555; text-align: center;
+    margin-top: auto;
+  }
+</style>
+</head>
+<body oncontextmenu="return false">
+
+<div id="app">
+  <div id="canvas-wrap">
+    <canvas id="canvas"></canvas>
+    <div id="status-mini"></div>
+    <div id="subtitle"></div>
+  </div>
+
+  <img id="preload-img" src="Elio-kimono-256-512.png" style="position:absolute;opacity:0;width:1px;height:1px;pointer-events:none">
+
+  <div id="toolbar">
+    <button class="tool-btn" id="btn-settings" title="设置">⚙</button>
+  </div>
+
+  <div id="settings-panel">
+    <div class="settings-header">
+      <h3>⚙ 设置</h3>
+      <button id="btn-close-settings" title="关闭">✕</button>
+    </div>
+    <div class="setting-row">
+      <label>震动幅度 <span class="val" id="amp-val">10</span></label>
+      <input type="range" id="amp" min="0" max="30" value="10">
+    </div>
+    <div class="setting-row">
+      <label>震动频率 <span class="val" id="freq-val">60</span></label>
+      <input type="range" id="freq" min="10" max="150" value="60">
+    </div>
+    <div class="setting-row">
+      <label>音量灵敏度 <span class="val" id="gain-val">1.5</span></label>
+      <input type="range" id="gain" min="0.1" max="5" step="0.1" value="1.5">
+    </div>
+    <div class="setting-row">
+      <label>最低阈值 <span class="val" id="thresh-val">0.03</span></label>
+      <input type="range" id="thresh" min="0" max="0.3" step="0.01" value="0.03">
+    </div>
+    <hr class="setting-divider">
+    <h3 style="font-size:13px;color:#e8d5b7;">🌊 静息浮动</h3>
+    <div class="setting-row">
+      <label>浮动幅度 <span class="val" id="float-amp-val">13</span></label>
+      <input type="range" id="float-amp" min="0" max="30" value="13">
+    </div>
+    <div class="setting-row">
+      <label>浮动速度 <span class="val" id="float-speed-val">0.6</span></label>
+      <input type="range" id="float-speed" min="0.1" max="2" step="0.1" value="0.6">
+    </div>
+    <hr class="setting-divider">
+    <h3 style="font-size:13px;color:#e8d5b7;">🪟 窗口宽度</h3>
+    <div class="setting-row">
+      <label>宽度 <span class="val" id="winw-val">440</span> px</label>
+      <input type="range" id="winw" min="300" max="800" value="440">
+    </div>
+    <hr class="setting-divider">
+    <button id="btn-reconnect">🔌 重新连接</button>
+    <p class="info-text">左键任务栏托盘显示窗口</p>
+  </div>
+</div>
+
+<script>
+// ── DOM ──
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const subtitleEl = document.getElementById('subtitle');
+const statusMini = document.getElementById('status-mini');
+const btnSettings = document.getElementById('btn-settings');
+const btnCloseSettings = document.getElementById('btn-close-settings');
+const settingsPanel = document.getElementById('settings-panel');
+const btnReconnect = document.getElementById('btn-reconnect');
+const ampR = document.getElementById('amp'), ampV = document.getElementById('amp-val');
+const freqR = document.getElementById('freq'), freqV = document.getElementById('freq-val');
+const gainR = document.getElementById('gain'), gainV = document.getElementById('gain-val');
+const threshR = document.getElementById('thresh'), threshV = document.getElementById('thresh-val');
+const floatAmpR = document.getElementById('float-amp'), floatAmpV = document.getElementById('float-amp-val');
+const floatSpeedR = document.getElementById('float-speed'), floatSpeedV = document.getElementById('float-speed-val');
+const winwR = document.getElementById('winw'), winwV = document.getElementById('winw-val');
+
+// ── 设置持久化（Tauri 文件优先，localStorage 兜底）──
+const SETTINGS_KEY = 'elio_settings';
+const DEFAULTS = { amp: 10, freq: 60, gain: 1.5, thresh: 0.03, floatAmp: 13, floatSpeed: 0.6, windowWidth: 440 };
+
+function tauriIpc() {
+  return (window.__TAURI_INTERNALS__ || window.__TAURI__?.core || {}).invoke;
+}
+
+async function loadSettings() {
+  // 优先从 Tauri 文件读取
+  const invoke = tauriIpc();
+  if (invoke) {
+    try {
+      const raw = await invoke('load_settings');
+      if (raw && raw !== '{}') return JSON.parse(raw);
+    } catch (_) {}
+  }
+  // fallback: localStorage
+  try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; }
+  catch (_) { return {}; }
+}
+
+function saveSettings(s) {
+  const json = JSON.stringify(s);
+  localStorage.setItem(SETTINGS_KEY, json);
+  const invoke = tauriIpc();
+  if (invoke) {
+    invoke('save_settings', { settings: json }).catch(() => {});
+  }
+}
+
+// 初始化设置（同步用 localStorage 先渲染，异步加载 Tauri 文件覆盖）
+const settings = { ...DEFAULTS, ...(() => {
+  try { return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; }
+  catch (_) { return {}; }
+})() };
+ampR.value = settings.amp; ampV.textContent = settings.amp;
+freqR.value = settings.freq; freqV.textContent = settings.freq;
+gainR.value = settings.gain; gainV.textContent = settings.gain;
+threshR.value = settings.thresh; threshV.textContent = settings.thresh.toFixed(2);
+floatAmpR.value = settings.floatAmp; floatAmpV.textContent = settings.floatAmp;
+floatSpeedR.value = settings.floatSpeed; floatSpeedV.textContent = settings.floatSpeed.toFixed(1);
+winwR.value = settings.windowWidth; winwV.textContent = settings.windowWidth;
+
+// 异步加载 Tauri 文件覆盖
+(async () => {
+  const saved = await loadSettings();
+  if (saved && Object.keys(saved).length > 0) {
+    Object.assign(settings, DEFAULTS, saved);
+    ampR.value = settings.amp; ampV.textContent = settings.amp;
+    freqR.value = settings.freq; freqV.textContent = settings.freq;
+    gainR.value = settings.gain; gainV.textContent = settings.gain;
+    threshR.value = settings.thresh; threshV.textContent = settings.thresh.toFixed(2);
+    floatAmpR.value = settings.floatAmp; floatAmpV.textContent = settings.floatAmp;
+    floatSpeedR.value = settings.floatSpeed; floatSpeedV.textContent = settings.floatSpeed.toFixed(1);
+    winwR.value = settings.windowWidth; winwV.textContent = settings.windowWidth;
+    saveSettings(settings);
+    // 恢复窗口大小
+    const invoke = tauriIpc();
+    if (invoke && settings.windowWidth !== 440) {
+      const h = Math.round(settings.windowWidth * 720 / 440);
+      invoke('set_window_size', { width: settings.windowWidth, height: h }).catch(() => {});
+    }
+  }
+})();
+
+[ampR, freqR, gainR, threshR, floatAmpR, floatSpeedR, winwR].forEach(r => {
+  r.addEventListener('input', () => {
+    settings.amp = parseFloat(ampR.value) || 10;
+    settings.freq = parseFloat(freqR.value) || 60;
+    settings.gain = parseFloat(gainR.value) || 1.5;
+    settings.thresh = parseFloat(threshR.value) || 0.03;
+    settings.floatAmp = parseFloat(floatAmpR.value) || 13;
+    settings.floatSpeed = parseFloat(floatSpeedR.value) || 0.6;
+    ampV.textContent = settings.amp;
+    freqV.textContent = settings.freq;
+    gainV.textContent = settings.gain;
+    threshV.textContent = settings.thresh.toFixed(2);
+    floatAmpV.textContent = settings.floatAmp;
+    floatSpeedV.textContent = settings.floatSpeed.toFixed(1);
+    settings.windowWidth = parseFloat(winwR.value) || 440;
+    winwV.textContent = settings.windowWidth;
+    saveSettings(settings);
+    // 调用 Tauri 调整窗口大小（高度按比例 720/440）
+    const invoke = tauriIpc();
+    if (invoke) {
+      const h = Math.round(settings.windowWidth * 720 / 440);
+      invoke('set_window_size', { width: settings.windowWidth, height: h }).catch(() => {});
+    }
+  });
+});
+
+// ── 设置面板 ──
+let panelOpen = false;
+function openSettings() {
+  panelOpen = true;
+  settingsPanel.classList.add('open');
+  btnSettings.classList.add('active');
+}
+function closeSettings() {
+  panelOpen = false;
+  settingsPanel.classList.remove('open');
+  btnSettings.classList.remove('active');
+}
+btnSettings.addEventListener('click', () => {
+  panelOpen ? closeSettings() : openSettings();
+});
+btnCloseSettings.addEventListener('click', closeSettings);
+
+// ── 音频 ──
+const WS_URL = 'ws://127.0.0.1:3456/ws/elio';
+let ws = null, audioCtx = null;
+let characterImg = null;
+let connected = false, isTalking = false;
+let contentBuffer = '';
+let pendingSubtitle = '', subtitleReveal = 0;
+let totalAudioDuration = 0, audioPlayedDuration = 0;
+let smoothVolume = 0;
+const ATTACK = 0.25, RELEASE = 0.06;
+let audioQueue = [], isPlaying = false, playStartTime = 0, currentVolumes = [];
+
+function b64ToBuf(b64) {
+  const bin = atob(b64), u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8.buffer;
+}
+
+function computeVolumes(buf, ms) {
+  ms = ms || 50;
+  const ch = buf.getChannelData(0), sr = buf.sampleRate, c = Math.floor(sr * ms / 1000);
+  const vols = [];
+  for (let i = 0; i < ch.length; i += c) {
+    let sum = 0; const n = Math.min(c, ch.length - i);
+    for (let j = 0; j < n; j++) sum += ch[i + j] * ch[i + j];
+    vols.push(Math.sqrt(sum / n));
+  }
+  const mx = Math.max(...vols, 0.001);
+  return vols.map(v => Math.min(v / mx, 1));
+}
+
+function getVol() {
+  if (!audioCtx || !isPlaying || !currentVolumes.length) return 0;
+  const e = (audioCtx.currentTime - playStartTime) * 1000;
+  const i = Math.floor(e / 50);
+  return i < currentVolumes.length ? currentVolumes[i] : 0;
+}
+
+function playNext() {
+  if (!audioQueue.length) {
+    isPlaying = false; currentVolumes = []; isTalking = false;
+    subtitleReveal = pendingSubtitle.length;
+    subtitleEl.textContent = pendingSubtitle;
+    statusMini.className = 'on';
+    return;
+  }
+  const item = audioQueue.shift();
+  isPlaying = true; isTalking = true; currentVolumes = item.volumes;
+  totalAudioDuration += item.buffer.duration;
+  statusMini.className = 'talk';
+  const src = audioCtx.createBufferSource();
+  src.buffer = item.buffer; src.connect(audioCtx.destination);
+  playStartTime = audioCtx.currentTime;
+  src.start(playStartTime);
+  src.onended = () => {
+    audioPlayedDuration += item.buffer.duration;
+    playNext();
+  };
+}
+
+async function onTts(msg) {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+  try {
+    const buf = await audioCtx.decodeAudioData(b64ToBuf(msg.data));
+    audioQueue.push({ buffer: buf, volumes: computeVolumes(buf) });
+    if (!isPlaying) playNext();
+  } catch (_) {}
+}
+
+// ── WebSocket ──
+function doConnect() {
+  try { ws = new WebSocket(WS_URL); } catch (_) { return; }
+  ws.onopen = () => {
+    connected = true;
+    statusMini.className = 'on';
+    btnReconnect.textContent = '🔌 已连接';
+    btnReconnect.classList.remove('disconnected');
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  };
+  ws.onmessage = e => {
+    try {
+      const msg = JSON.parse(e.data);
+      switch (msg.type) {
+        case 'content_start':
+          subtitleEl.textContent = '';
+          contentBuffer = '';
+          pendingSubtitle = '';
+          subtitleReveal = 0;
+          totalAudioDuration = 0;
+          audioPlayedDuration = 0;
+          break;
+        case 'content_delta':
+          const t = msg.delta?.text || msg.text || '';
+          contentBuffer += t;
+          const zhText = contentBuffer.match(/<zh>(.*?)<\/zh>/g)
+            ?.map(m => m.replace('<zh>', '').replace('</zh>', ''))
+            .join('') || '';
+          if (zhText) pendingSubtitle = zhText;
+          break;
+        case 'tts_chunk': onTts(msg); break;
+        case 'message_complete':
+          if (!pendingSubtitle && contentBuffer)
+            pendingSubtitle = contentBuffer.replace(/<[^>]+>/g, '').trim();
+          break;
+      }
+    } catch (_) {}
+  };
+  ws.onclose = () => {
+    connected = false; isTalking = false; isPlaying = false;
+    audioQueue = []; currentVolumes = [];
+    ws = null;
+    statusMini.className = '';
+    btnReconnect.textContent = '🔌 已断开 (点击重连)';
+    btnReconnect.classList.add('disconnected');
+    if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+  };
+}
+
+function doDisconnect() {
+  connected = false; isTalking = false; isPlaying = false;
+  audioQueue = []; currentVolumes = [];
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  statusMini.className = '';
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+}
+
+btnReconnect.addEventListener('click', () => {
+  if (connected) doDisconnect();
+  doConnect();
+});
+
+// ── 渲染 ──
+function resizeCanvas() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const w = rect.width || 400;
+  const h = rect.height || 600;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+function frame(time) {
+  if (canvas.width === 0 || canvas.height === 0) resizeCanvas();
+  const CW = canvas.width, CH = canvas.height;
+  const CX = CW / 2, CY = CH / 2;
+  const t = time / 1000;
+  const gain = settings.gain;
+  const threshold = settings.thresh;
+  let raw = getVol() * gain;
+  if (raw > 1) raw = 1;
+  if (raw < threshold) raw = 0;
+  if (raw > smoothVolume) smoothVolume += (raw - smoothVolume) * ATTACK;
+  else smoothVolume += (raw - smoothVolume) * RELEASE;
+
+  // 字幕同步
+  if (pendingSubtitle && isPlaying) {
+    const elapsed = audioCtx ? (audioCtx.currentTime - playStartTime) : 0;
+    const currentTotal = audioPlayedDuration + elapsed;
+    const progress = totalAudioDuration > 0 ? Math.min(currentTotal / totalAudioDuration, 1) : 1;
+    const reveal = Math.floor(progress * pendingSubtitle.length);
+    if (reveal > subtitleReveal) {
+      subtitleReveal = reveal;
+      subtitleEl.textContent = pendingSubtitle.slice(0, reveal);
+    }
+  }
+
+  // 震动 / 静息浮动
+  const amp = settings.amp;
+  const freq = settings.freq;
+  let offsetX = 0, offsetY = 0;
+  if (isTalking && smoothVolume > 0.01) {
+    offsetY = (Math.sin(t * freq) * 0.6 + Math.sin(t * freq * 0.73) * 0.25 + Math.sin(t * freq * 1.57) * 0.15) * smoothVolume * amp;
+  } else {
+    // 静息浮动：缓慢呼吸感漂浮 + 轻微左右摇摆（使用 settings 控制）
+    const f = t * settings.floatSpeed;
+    const fa = settings.floatAmp;
+    offsetY = Math.sin(f) * fa * 0.46 + Math.sin(f * 1.73 + 1.2) * fa * 0.31 + Math.sin(f * 0.47 + 2.5) * fa * 0.23;
+    offsetX = Math.cos(f * 0.83 + 0.7) * fa * 0.23 + Math.sin(f * 1.31 + 3.1) * fa * 0.15;
+  }
+
+  ctx.clearRect(0, 0, CW, CH);
+
+  if (characterImg) {
+    const iw = characterImg.naturalWidth || characterImg.width || 256;
+    const ih = characterImg.naturalHeight || characterImg.height || 512;
+    const scale = Math.min(CW / iw, CH / ih) * 0.9;
+    const w = iw * scale, h = ih * scale;
+    ctx.save();
+    ctx.translate(CX + offsetX, CY + offsetY);
+    ctx.drawImage(characterImg, -w / 2, -h / 2, w, h);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#555';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Elio', CX, CY);
+  }
+
+  requestAnimationFrame(frame);
+}
+
+// ── 禁止双击全屏 ──
+document.addEventListener('dblclick', e => e.preventDefault());
+
+// ── 启动 ──
+requestAnimationFrame(frame);
+
+// 从预加载的 <img> 获取角色图
+const preloadImg = document.getElementById('preload-img');
+if (preloadImg.complete && preloadImg.naturalWidth > 0) {
+  characterImg = preloadImg;
+} else {
+  preloadImg.onload = () => { characterImg = preloadImg; };
+}
+
+setTimeout(() => doConnect(), 500);
+
+// 通过 Tauri 命令禁用 WebView2 原生右键菜单
+setTimeout(() => {
+  const invoke = tauriIpc();
+  if (invoke) invoke('disable_context_menu').catch(() => {});
+}, 200);
+</script>
+</body>
+</html>

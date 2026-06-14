@@ -5,6 +5,7 @@ members = [
     "elio-tools",
     "elio-server",
     "elio-client",
+    "elio-desktop",
     "elio-adapters/core",
     "elio-adapters/feishu",
     "elio-adapters/dingtalk",

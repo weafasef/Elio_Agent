@@ -1,0 +1,8 @@
+{
+  "identifier": "default",
+  "description": "Default capability for Elio desktop",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}
